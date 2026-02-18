@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 振动图标 - 矢量图 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M0,15h2v-2H0V15zM0,11h2V9H0V11zM0,19h2v-2H0V19zM4,15h16v-2H4V15zM4,11h16V9H4V11zM4,19h16v-2H4V19zM20,15h2v-2h-2V15zM20,11h2V9h-2V11zM20,19h2v-2h-2V19z"/>
+</vector>

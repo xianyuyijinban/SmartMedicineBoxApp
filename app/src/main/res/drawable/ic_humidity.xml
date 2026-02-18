@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 湿度图标 - 矢量图 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,2c-5.33,4.55 -8,8.48 -8,11.8c0,4.98 3.8,8.2 8,8.2s8,-3.22 8,-8.2C20,10.48 17.33,6.55 12,2zM12,20c-2.21,0 -4,-1.79 -4,-4c0,-1.74 1.39,-3.51 3.42,-5.36C12.2,10.69 12.6,10.2 13,9.72c0.4,0.48 0.8,0.97 1.58,1.92C16.61,12.49 18,14.26 18,16C18,18.21 15.79,20 12,20z"/>
+</vector>

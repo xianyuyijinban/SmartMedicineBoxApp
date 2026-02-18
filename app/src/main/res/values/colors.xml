@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material Design 3 颜色 - 智能药箱主题 -->
+    
+    <!-- 主色调 (医疗绿) -->
+    <color name="md_theme_primary">#FF4CAF50</color>
+    <color name="md_theme_onPrimary">#FFFFFFFF</color>
+    <color name="md_theme_primaryContainer">#FFC8E6C9</color>
+    <color name="md_theme_onPrimaryContainer">#FF1B5E20</color>
+    
+    <!-- 次要色 (青色) -->
+    <color name="md_theme_secondary">#FF009688</color>
+    <color name="md_theme_onSecondary">#FFFFFFFF</color>
+    <color name="md_theme_secondaryContainer">#FFB2DFDB</color>
+    <color name="md_theme_onSecondaryContainer">#FF004D40</color>
+    
+    <!-- 第三色 (蓝色) -->
+    <color name="md_theme_tertiary">#FF2196F3</color>
+    <color name="md_theme_onTertiary">#FFFFFFFF</color>
+    <color name="md_theme_tertiaryContainer">#FFBBDEFB</color>
+    <color name="md_theme_onTertiaryContainer">#FF0D47A1</color>
+    
+    <!-- 错误色 -->
+    <color name="md_theme_error">#FFF44336</color>
+    <color name="md_theme_onError">#FFFFFFFF</color>
+    <color name="md_theme_errorContainer">#FFFFCDD2</color>
+    <color name="md_theme_onErrorContainer">#FFB71C1C</color>
+    
+    <!-- 背景和表面 -->
+    <color name="md_theme_background">#FFF5F5F5</color>
+    <color name="md_theme_onBackground">#FF212121</color>
+    <color name="md_theme_surface">#FFFFFFFF</color>
+    <color name="md_theme_onSurface">#FF212121</color>
+    <color name="md_theme_surfaceVariant">#FFE0E0E0</color>
+    <color name="md_theme_onSurfaceVariant">#FF757575</color>
+    
+    <!-- 轮廓 -->
+    <color name="md_theme_outline">#FFBDBDBD</color>
+    <color name="md_theme_outlineVariant">#FFE0E0E0</color>
+    
+    <!-- 向后兼容的传统颜色定义 -->
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    
+    <!-- 应用主题色 (兼容旧代码) -->
+    <color name="primary">@color/md_theme_primary</color>
+    <color name="primary_dark">#FF388E3C</color>
+    <color name="accent">#FFFFC107</color>
+    <color name="background">@color/md_theme_background</color>
+    <color name="card_background">@color/md_theme_surface</color>
+    <color name="text_primary">@color/md_theme_onBackground</color>
+    <color name="text_secondary">@color/md_theme_onSurfaceVariant</color>
+    
+    <!-- 状态颜色 -->
+    <color name="status_online">#FF4CAF50</color>
+    <color name="status_offline">#FFF44336</color>
+    <color name="status_connecting">#FFFFC107</color>
+    <color name="status_warning">#FFFF9800</color>
+    <color name="status_info">#FF2196F3</color>
+    
+    <!-- 药箱状态颜色 -->
+    <color name="box_state_closed">#FF4CAF50</color>
+    <color name="box_state_opened">#FF2196F3</color>
+    <color name="box_state_moving">#FFFF9800</color>
+    <color name="box_state_tilted">#FFF44336</color>
+    
+    <!-- 环境数据卡片颜色 -->
+    <color name="temperature">#FFFF5722</color>
+    <color name="humidity">#FF03A9F4</color>
+    <color name="pressure">#FF9C27B0</color>
+    <color name="vibration">#FF795548</color>
+    <color name="tilt">#FF607D8B</color>
+</resources>

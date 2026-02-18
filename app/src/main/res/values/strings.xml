@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">智能药箱</string>
+    
+    <!-- 连接状态 -->
+    <string name="status_connected">已连接</string>
+    <string name="status_disconnected">未连接</string>
+    <string name="status_connecting">连接中...</string>
+    <string name="status_error">连接错误</string>
+    <string name="status_online">设备在线</string>
+    <string name="status_offline">设备离线</string>
+    
+    <!-- 按钮文本 -->
+    <string name="btn_connect">连接</string>
+    <string name="btn_disconnect">断开</string>
+    <string name="btn_refresh">立即上报</string>
+    <string name="btn_reset">重置设备</string>
+    <string name="btn_settings">设置</string>
+    <string name="btn_save">保存</string>
+    <string name="btn_cancel">取消</string>
+    
+    <!-- 设置相关 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_mqtt_broker">MQTT Broker 地址</string>
+    <string name="settings_device_id">设备ID</string>
+    <string name="settings_mqtt_hint">例如: tcp://192.168.1.100:1883</string>
+    <string name="settings_device_hint">例如: medicine_box_001</string>
+    
+    <!-- 传感器标签 -->
+    <string name="label_temperature">温度</string>
+    <string name="label_humidity">湿度</string>
+    <string name="label_pressure">气压</string>
+    <string name="label_altitude">海拔</string>
+    <string name="label_vibration">振动</string>
+    <string name="label_tilt">倾斜</string>
+    <string name="label_box_status">药箱状态</string>
+    
+    <!-- 设备状态 -->
+    <string name="label_online_status">在线状态</string>
+    <string name="label_battery">电量</string>
+    <string name="label_wifi">WiFi信号</string>
+    <string name="label_medicine_count">药品数量</string>
+    <string name="label_firmware">固件版本</string>
+    <string name="label_interval">上报间隔</string>
+    
+    <!-- 药箱状态 -->
+    <string name="box_state_closed">已关闭</string>
+    <string name="box_state_opened">已打开</string>
+    <string name="box_state_moving">移动中</string>
+    <string name="box_state_tilted">倾斜</string>
+    <string name="box_state_unknown">未知</string>
+    
+    <!-- 正常/异常 -->
+    <string name="status_normal">正常</string>
+    <string name="status_abnormal">异常</string>
+    <string name="status_high">过高</string>
+    <string name="status_low">过低</string>
+    
+    <!-- 标题 -->
+    <string name="title_main">智能药箱监控</string>
+    <string name="title_environment">环境数据</string>
+    <string name="title_box_status">药箱状态</string>
+    <string name="title_device_info">设备信息</string>
+    <string name="title_control">设备控制</string>
+    
+    <!-- 单位 -->
+    <string name="unit_celsius">°C</string>
+    <string name="unit_percent">%%</string>
+    <string name="unit_hpa">hPa</string>
+    <string name="unit_meter">m</string>
+    <string name="unit_second">秒</string>
+    <string name="unit_dbm">dBm</string>
+    <string name="unit_degree">°</string>
+    
+    <!-- 提示消息 -->
+    <string name="msg_connecting">正在连接...</string>
+    <string name="msg_connected">连接成功</string>
+    <string name="msg_disconnected">已断开连接</string>
+    <string name="msg_connection_failed">连接失败</string>
+    <string name="msg_command_sent">命令已发送</string>
+    <string name="msg_not_connected">设备未连接</string>
+    <string name="msg_reset_confirm">确定要重置设备吗？这将清除所有配置并重启设备。</string>
+    <string name="msg_set_interval">设置上报间隔（秒）</string>
+    <string name="msg_last_update">最后更新: %s</string>
+    
+    <!-- 警告信息 -->
+    <string name="alert_temp_high">温度异常: 过高</string>
+    <string name="alert_temp_low">温度异常: 过低</string>
+    <string name="alert_humidity_high">湿度异常: 过高</string>
+    <string name="alert_humidity_low">湿度异常: 过低</string>
+    <string name="alert_box_tilted">药箱处于倾斜状态</string>
+    <string name="alert_box_moving">药箱正在移动</string>
+</resources>
