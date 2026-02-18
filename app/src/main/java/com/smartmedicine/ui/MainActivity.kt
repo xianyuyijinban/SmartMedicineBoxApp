@@ -49,8 +49,16 @@ class MainActivity : ComponentActivity() {
     
     // 默认配置
     companion object {
+        // 本地MQTT Broker配置
         const val DEFAULT_MQTT_BROKER = "tcp://192.168.1.100:1883"
         const val DEFAULT_DEVICE_ID = "medicine_box_001"
+        
+        // 阿里云IoT MQTT配置（示例）
+        // 请替换为你的实际设备信息
+        const val ALIYUN_PRODUCT_KEY = "your_product_key"
+        const val ALIYUN_DEVICE_NAME = "your_device_name"
+        const val ALIYUN_DEVICE_SECRET = "your_device_secret"
+        const val ALIYUN_REGION = "cn-shanghai"
     }
     
     // 通知权限请求（Android 13+）

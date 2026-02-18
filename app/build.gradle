@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace 'com.smartmedicine'
-    compileSdk 34
+    compileSdk 31
 
     defaultConfig {
         applicationId "com.smartmedicine"
@@ -52,6 +52,7 @@ android {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
         }
     }
+    buildToolsVersion '36.1.0'
 }
 
 dependencies {
