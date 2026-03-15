@@ -6,6 +6,7 @@
   */
 #include "sensor_manager.h"
 #include "app_tasks.h"
+#include "sensor_fault_policy.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -37,6 +38,8 @@ static uint8_t history_count = 0;
 static float rated_temperature = ENV_RATED_DEFAULT_TEMP_C;
 static float rated_humidity = ENV_RATED_DEFAULT_HUMIDITY_PERCENT;
 static EnvironmentAlertStatus_t env_alert_status;
+static uint8_t sensor_fault_mask = 0U;
+static uint8_t bmp280_available = 0U;
 
 /**
   * @brief  更新加速度历史数据
@@ -112,6 +115,8 @@ static float CalculateVibration(void)
 
 static void UpdateEnvAlertStatus(void)
 {
+    uint8_t env_data_valid;
+
     env_alert_status.rated_temperature = rated_temperature;
     env_alert_status.rated_humidity = rated_humidity;
     env_alert_status.temp_low_limit = rated_temperature * (1.0f - ENV_ABNORMAL_RATIO);
@@ -119,7 +124,9 @@ static void UpdateEnvAlertStatus(void)
     env_alert_status.humidity_low_limit = rated_humidity * (1.0f - ENV_ABNORMAL_RATIO);
     env_alert_status.humidity_high_limit = rated_humidity * (1.0f + ENV_ABNORMAL_RATIO);
 
-    if (box_data.is_valid == 0U) {
+    /* 温湿度告警只依赖 AHT20，可在未接 BMP280 时继续工作。 */
+    env_data_valid = (uint8_t)((sensor_fault_mask & SENSOR_FAULT_AHT20) == 0U);
+    if (env_data_valid == 0U) {
         env_alert_status.temperature_abnormal = 0U;
         env_alert_status.humidity_abnormal = 0U;
         env_alert_status.is_abnormal = 0U;
@@ -162,12 +169,17 @@ void SensorManager_Init(void)
     }
 
     /* 初始化BMP280 */
+    bmp280_available = 0U;
     retry = SENSOR_INIT_RETRY_COUNT;
     while (retry--) {
         if (BMP280_Init() == 0) {
+            bmp280_available = 1U;
             break;
         }
         HAL_Delay(SENSOR_INIT_DELAY_MS);
+    }
+    if (bmp280_available == 0U) {
+        printf("[Sensor] BMP280 not detected, pressure data disabled\r\n");
     }
     
     /* 初始化振动检测历史数据 */
@@ -179,6 +191,7 @@ void SensorManager_Init(void)
     memset(&box_data, 0, sizeof(box_data));
     box_data.state = BOX_STATE_CLOSED;
     box_data.is_valid = 0U;
+    sensor_fault_mask = 0U;
     rated_temperature = ENV_RATED_DEFAULT_TEMP_C;
     rated_humidity = ENV_RATED_DEFAULT_HUMIDITY_PERCENT;
     memset(&env_alert_status, 0, sizeof(env_alert_status));
@@ -222,7 +235,7 @@ uint8_t SensorManager_ReadAll(void)
         }
     }
     if (retry_count >= max_retries) {
-        result |= 0x01;
+        result |= SENSOR_FAULT_MPU6050;
         printf("[Sensor] MPU6050 read failed after %d retries\r\n", max_retries);
     }
 
@@ -239,34 +252,42 @@ uint8_t SensorManager_ReadAll(void)
         }
     }
     if (retry_count >= max_retries) {
-        result |= 0x02;
+        result |= SENSOR_FAULT_AHT20;
         printf("[Sensor] AHT20 read failed after %d retries\r\n", max_retries);
     }
 
     /* 读取BMP280 */
-    retry_count = 0;
-    while (retry_count < max_retries) {
-        if (BMP280_ReadData(&bmp_data) == 0) {
-            box_data.env.pressure = bmp_data.pressure;
-            box_data.env.altitude = bmp_data.altitude;
+    if (SensorFaultPolicy_ShouldReadBmp280(bmp280_available) != 0U) {
+        retry_count = 0;
+        while (retry_count < max_retries) {
+            if (BMP280_ReadData(&bmp_data) == 0) {
+                box_data.env.pressure = bmp_data.pressure;
+                box_data.env.altitude = bmp_data.altitude;
 
-            /* 温度取AHT20和BMP280的平均值 */
-            if ((result & 0x02) == 0) {
-                box_data.env.temperature = (aht_data.temperature + bmp_data.temperature) / 2.0f;
+                /* 温度取AHT20和BMP280的平均值 */
+                if ((result & SENSOR_FAULT_AHT20) == 0U) {
+                    box_data.env.temperature = (aht_data.temperature + bmp_data.temperature) / 2.0f;
+                } else {
+                    box_data.env.temperature = bmp_data.temperature;
+                }
+                break;
             } else {
-                box_data.env.temperature = bmp_data.temperature;
+                retry_count++;
+                HAL_Delay(SENSOR_RETRY_DELAY_MS);
             }
-            break;
-        } else {
-            retry_count++;
-            HAL_Delay(SENSOR_RETRY_DELAY_MS);
         }
-    }
-    if (retry_count >= max_retries) {
-        result |= 0x04;
-        printf("[Sensor] BMP280 read failed after %d retries\r\n", max_retries);
-        /* 如果BMP280失败，使用AHT20的温度 */
-        if ((result & 0x02) == 0) {
+        if (retry_count >= max_retries) {
+            result |= SENSOR_FAULT_BMP280;
+            printf("[Sensor] BMP280 read failed after %d retries\r\n", max_retries);
+            /* 如果BMP280失败，使用AHT20的温度 */
+            if ((result & SENSOR_FAULT_AHT20) == 0U) {
+                box_data.env.temperature = aht_data.temperature;
+            }
+        }
+    } else {
+        box_data.env.pressure = 0.0f;
+        box_data.env.altitude = 0.0f;
+        if ((result & SENSOR_FAULT_AHT20) == 0U) {
             box_data.env.temperature = aht_data.temperature;
         }
     }
@@ -274,7 +295,8 @@ uint8_t SensorManager_ReadAll(void)
     /* 检测药箱状态 */
     box_data.state = SensorManager_DetectState();
     box_data.timestamp = HAL_GetTick();
-    box_data.is_valid = (result == 0) ? 1 : 0;
+    box_data.is_valid = SensorFaultPolicy_IsDataValid(result);
+    sensor_fault_mask = result;
     UpdateEnvAlertStatus();
     
     return result;
@@ -322,6 +344,11 @@ void SensorManager_GetEnvAlertStatus(EnvironmentAlertStatus_t *status)
     if (status != NULL) {
         memcpy(status, &env_alert_status, sizeof(EnvironmentAlertStatus_t));
     }
+}
+
+uint8_t SensorManager_GetFaultMask(void)
+{
+    return sensor_fault_mask;
 }
 
 /**

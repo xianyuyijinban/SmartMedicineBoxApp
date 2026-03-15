@@ -42,8 +42,8 @@ void App_Init(void);
 void App_StartTasks(void);
 
 /* 网络配置 (根据实际情况修改) */
-#define WIFI_SSID           "YourWiFiSSID"
-#define WIFI_PASSWORD       "YourWiFiPassword"
+#define WIFI_SSID           "Galaxy Note 7 Ultra"
+#define WIFI_PASSWORD       "12345678y"
 #define MQTT_BROKER_IP      "192.168.1.100"
 #define MQTT_BROKER_PORT    1883
 #define MQTT_CLIENT_ID      "medicine_box_001"
@@ -64,5 +64,15 @@ void App_StartTasks(void);
 #define BUZZER_BEEP_COUNT           3
 #define BUZZER_BEEP_ON_MS           200
 #define BUZZER_BEEP_INTERVAL_MS     1000
+
+/* 跌落检测与报警配置 */
+#define DROP_ACCEL_THRESHOLD_G      6.0f
+#define DROP_ACCEL_THRESHOLD_SQ     (DROP_ACCEL_THRESHOLD_G * DROP_ACCEL_THRESHOLD_G)
+#define DROP_ACCEL_DURATION_MS      20U
+#define DROP_ALARM_ON_MS            5000U
+#define DROP_ALARM_GAP_MS           3000U
+#define DROP_ALARM_REPEAT_COUNT     3U
+#define KEY2_DEBOUNCE_MS            50U
+#define BUZZER_POLL_INTERVAL_MS     20U
 
 #endif /* __APP_TASKS_H */

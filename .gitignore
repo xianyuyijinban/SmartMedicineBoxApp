@@ -1,3 +1,21 @@
 .worktrees/
 gradle_home/
 sync_bundle_20260222/
+
+# Keil MDK generated artifacts
+MDK-ARM/Smartbox/
+MDK-ARM/*.uvoptx
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.log
+MDK-ARM/*.lst
+MDK-ARM/Project with XiaoJunWei/
+MDK-ARM/EventRecorderStub.scvd
+
+# Host-side test binaries
+MDK-ARM/code/tests/*.exe
+
+# Runtime/debug capture logs
+boot_log_*.txt
+com11_log.txt
+esp_dump.txt
+esp_state*.txt

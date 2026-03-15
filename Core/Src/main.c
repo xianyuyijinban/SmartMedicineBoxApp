@@ -54,8 +54,10 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint8_t esp_rx_byte = 0;
+uint8_t g_esp_rx_byte = 0;
 volatile uint32_t g_uart3_last_rx_tick = 0;
+volatile uint32_t g_uart3_error_count = 0;
+volatile uint32_t g_uart3_last_error_code = 0;
 
 /* USER CODE END PV */
 
@@ -68,6 +70,11 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void UART3_StartReceiveIT(void)
+{
+  /* ESP8266使用单字节接收中断，错误回调里也会重入该函数以自恢复。 */
+  (void)HAL_UART_Receive_IT(&huart3, &g_esp_rx_byte, 1);
+}
 
 /* USER CODE END 0 */
 
@@ -107,16 +114,16 @@ int main(void)
   MX_USART3_UART_Init();
   MX_I2C3_Init();
   MX_TIM1_Init();
-  /* USER CODE BEGIN 2 */
-  // 启动USART3接收中断
-  HAL_UART_Receive_IT(&huart3, &esp_rx_byte, 1);
-
-  // 初始化应用
-  App_Init();
-  /* USER CODE END 2 */
-
   /* Init scheduler */
   osKernelInitialize();
+
+  /* USER CODE BEGIN 2 */
+  // 启动USART3接收中断
+  UART3_StartReceiveIT();
+
+  // 初始化应用（依赖CMSIS-RTOS对象，必须在osKernelInitialize之后）
+  App_Init();
+  /* USER CODE END 2 */
 
   /* Call init function for freertos objects (in cmsis_os2.c) */
   // 注释掉自动生成的初始化
@@ -195,10 +202,25 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     {
         g_uart3_last_rx_tick = HAL_GetTick();
         // 使用HAL回调写入的字节，避免重复读RDR导致数据错乱
-        ESP8266_UART_RxCallback(esp_rx_byte);
+        ESP8266_UART_RxCallback(g_esp_rx_byte);
         
         // 重新启动接收
-        HAL_UART_Receive_IT(&huart3, &esp_rx_byte, 1);
+        UART3_StartReceiveIT();
+    }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART3)
+    {
+        /* ESP启动日志(74880)或噪声可能触发FE/NE/ORE，清标志后立即重启接收。 */
+        g_uart3_error_count++;
+        g_uart3_last_error_code = huart->ErrorCode;
+        __HAL_UART_CLEAR_OREFLAG(huart);
+        __HAL_UART_CLEAR_FEFLAG(huart);
+        __HAL_UART_CLEAR_NEFLAG(huart);
+        __HAL_UART_CLEAR_PEFLAG(huart);
+        UART3_StartReceiveIT();
     }
 }
 /* USER CODE END 4 */

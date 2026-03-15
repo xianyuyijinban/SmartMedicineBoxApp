@@ -30,17 +30,19 @@
 
 /* 缓冲区大小 */
 #define ESP8266_RX_BUF_SIZE     1024
-#define ESP8266_TX_BUF_SIZE     512
+/* Raw MQTT packet needs topic + payload + MQTT headers, 512 is insufficient. */
+#define ESP8266_TX_BUF_SIZE     1024
 #define ESP8266_CMD_TIMEOUT     5000    // 命令超时时间(ms)
 #define ESP8266_RESP_TIMEOUT    10000   // 响应超时时间(ms)
+#define ESP8266_DEVICE_NAME     "SmartBox"
 
 /* MQTT配置结构体 */
 typedef struct {
-    char broker_ip[32];         // MQTT服务器IP
+    char broker_ip[64];         // MQTT服务器地址/IP
     uint16_t broker_port;       // MQTT服务器端口
-    char client_id[32];         // 客户端ID
-    char username[32];          // 用户名
-    char password[32];          // 密码
+    char client_id[64];         // 客户端ID
+    char username[96];          // 用户名
+    char password[96];          // 密码
     uint16_t keepalive;         // 保活时间(秒)
 } ESP8266_MQTT_Config_t;
 
@@ -86,6 +88,8 @@ uint8_t ESP8266_MQTT_Publish(const char *topic, const char *payload, uint8_t qos
 uint8_t ESP8266_MQTT_Subscribe(const char *topic, uint8_t qos);
 uint8_t ESP8266_MQTT_Unsubscribe(const char *topic);
 void ESP8266_RegisterMQTTMessageCallback(ESP8266_MQTT_MessageCallback_t callback);
+const char* ESP8266_GetMqttDiag(void);
+uint16_t ESP8266_GetMqttActivePort(void);
 
 /* 状态获取 */
 ESP8266_State_t ESP8266_GetState(void);

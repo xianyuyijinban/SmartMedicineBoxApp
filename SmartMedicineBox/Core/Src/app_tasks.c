@@ -8,6 +8,9 @@
 #include "sensor_manager.h"
 #include "esp8266.h"
 #include "tim.h"
+#include "usart.h"
+#include "spi.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +31,37 @@ static volatile uint8_t env_alert_latched = 0U;
 static volatile uint8_t env_alert_pending = 0U;
 static volatile uint8_t env_recover_pending = 0U;
 static volatile uint8_t env_alert_reason_flags = 0U;
+static volatile uint8_t app_bus_fault_flags = 0U;
+static volatile uint8_t drop_alert_latched = 0U;
+static volatile uint8_t drop_alert_pending = 0U;
+static volatile uint8_t drop_alarm_request_pending = 0U;
+static volatile uint8_t drop_alarm_cancel_pending = 0U;
+static volatile uint32_t drop_alert_timestamp = 0U;
+static volatile uint32_t drop_alarm_cancel_timestamp = 0U;
+static volatile float drop_alert_accel_x = 0.0f;
+static volatile float drop_alert_accel_y = 0.0f;
+static volatile float drop_alert_accel_z = 0.0f;
+static volatile float drop_alert_accel_magnitude = 0.0f;
+
+typedef struct {
+    uint8_t key_armed;
+    uint8_t key_pressed_latched;
+    uint32_t key_press_tick;
+} KeyDebounceState_t;
+
+#define APP_BUS_FAULT_SENSOR   0x01U
+#define APP_BUS_FAULT_UART3    0x02U
+#define APP_BUS_FAULT_SPI1     0x04U
+#define LED2_FAULT_BLINK_MS    200U
+
+static void App_SetBusFaultFlag(uint8_t mask, uint8_t active)
+{
+    if (active != 0U) {
+        app_bus_fault_flags |= mask;
+    } else {
+        app_bus_fault_flags &= (uint8_t)(~mask);
+    }
+}
 
 static uint8_t App_ExtractJsonString(const char *payload, const char *key, char *out, uint16_t out_size)
 {
@@ -219,9 +253,9 @@ static void App_OnMqttMessage(const char *topic, const char *payload)
     (void)App_PublishControlResponse(response);
 }
 
-static uint8_t App_PublishPendingEnvAlert(void)
+static uint8_t App_PublishPendingAlerts(void)
 {
-    char payload[288];
+    char payload[320];
     EnvironmentAlertStatus_t env_status;
     MedicineBoxData_t data;
 
@@ -268,6 +302,35 @@ static uint8_t App_PublishPendingEnvAlert(void)
         }
     }
 
+    if (drop_alert_pending != 0U) {
+        snprintf(payload, sizeof(payload),
+                 "{\"event\":\"drop_detected\",\"timestamp\":%lu,"
+                 "\"accel_x\":%.3f,\"accel_y\":%.3f,\"accel_z\":%.3f,"
+                 "\"accel_magnitude\":%.3f,\"threshold_g\":%.1f,\"duration_ms\":%u}",
+                 drop_alert_timestamp,
+                 drop_alert_accel_x,
+                 drop_alert_accel_y,
+                 drop_alert_accel_z,
+                 drop_alert_accel_magnitude,
+                 DROP_ACCEL_THRESHOLD_G,
+                 (unsigned int)DROP_ACCEL_DURATION_MS);
+
+        if (ESP8266_MQTT_Publish(MQTT_TOPIC_ALERT, payload, 0, 0) == 0U) {
+            drop_alert_pending = 0U;
+        }
+    }
+
+    if (drop_alarm_cancel_pending != 0U) {
+        snprintf(payload, sizeof(payload),
+                 "{\"event\":\"drop_alarm_cancelled\",\"timestamp\":%lu,"
+                 "\"source\":\"key2\",\"stop_push\":1}",
+                 drop_alarm_cancel_timestamp);
+
+        if (ESP8266_MQTT_Publish(MQTT_TOPIC_ALERT, payload, 0, 0) == 0U) {
+            drop_alarm_cancel_pending = 0U;
+        }
+    }
+
     return 0U;
 }
 
@@ -285,6 +348,63 @@ static void Buzzer_StopTone(void)
 {
     (void)HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0U);
+}
+
+static uint8_t App_UpdateKey2Pressed(KeyDebounceState_t *state)
+{
+    uint32_t now;
+    uint8_t key_high;
+
+    if (state == NULL) {
+        return 0U;
+    }
+
+    now = HAL_GetTick();
+    key_high = (HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin) == GPIO_PIN_SET) ? 1U : 0U;
+
+    if (state->key_pressed_latched == 0U) {
+        if (key_high != 0U) {
+            if (state->key_armed == 0U) {
+                state->key_armed = 1U;
+                state->key_press_tick = now;
+            } else if ((uint32_t)(now - state->key_press_tick) >= KEY2_DEBOUNCE_MS) {
+                state->key_pressed_latched = 1U;
+                state->key_armed = 0U;
+                return 1U;
+            }
+        } else {
+            state->key_armed = 0U;
+        }
+    } else if (key_high == 0U) {
+        state->key_pressed_latched = 0U;
+    }
+
+    return 0U;
+}
+
+static uint8_t Buzzer_WaitWithCancel(uint32_t wait_ms, KeyDebounceState_t *key_state)
+{
+    uint32_t start_tick;
+
+    if (key_state == NULL) {
+        return 0U;
+    }
+
+    start_tick = HAL_GetTick();
+    while ((uint32_t)(HAL_GetTick() - start_tick) < wait_ms) {
+        uint32_t elapsed = (uint32_t)(HAL_GetTick() - start_tick);
+        uint32_t remaining = (wait_ms > elapsed) ? (wait_ms - elapsed) : 0U;
+        uint32_t delay_ms = (remaining > BUZZER_POLL_INTERVAL_MS) ? BUZZER_POLL_INTERVAL_MS : remaining;
+
+        if (App_UpdateKey2Pressed(key_state) != 0U) {
+            return 1U;
+        }
+        if (delay_ms > 0U) {
+            osDelay(delay_ms);
+        }
+    }
+
+    return 0U;
 }
 
 /**
@@ -360,15 +480,21 @@ void App_StartTasks(void)
 void SensorTask(void *argument)
 {
     EnvironmentAlertStatus_t env_status;
+    MedicineBoxData_t sensor_data;
+    uint8_t sensor_read_result;
     uint32_t last_mqtt_tick = 0;
+    uint8_t drop_over_threshold = 0U;
+    uint32_t drop_over_threshold_start_tick = 0U;
     
     printf("[SensorTask] Started\r\n");
     
     for (;;) {
         /* 读取所有传感器数据 */
-        SensorManager_ReadAll();
+        sensor_read_result = SensorManager_ReadAll();
+        App_SetBusFaultFlag(APP_BUS_FAULT_SENSOR, (sensor_read_result != 0U) ? 1U : 0U);
 
         SensorManager_GetEnvAlertStatus(&env_status);
+        SensorManager_GetData(&sensor_data);
         if (env_status.is_abnormal != 0U) {
             uint8_t reason_flags = 0U;
             if (env_status.temperature_abnormal != 0U) {
@@ -389,10 +515,39 @@ void SensorTask(void *argument)
             env_alert_reason_flags = 0U;
             env_recover_pending = 1U;
         }
+
+        if ((sensor_data.is_valid != 0U) && (drop_alert_latched == 0U)) {
+            float accel_sq = (sensor_data.motion.accel_x * sensor_data.motion.accel_x) +
+                             (sensor_data.motion.accel_y * sensor_data.motion.accel_y) +
+                             (sensor_data.motion.accel_z * sensor_data.motion.accel_z);
+
+            if (accel_sq >= DROP_ACCEL_THRESHOLD_SQ) {
+                if (drop_over_threshold == 0U) {
+                    drop_over_threshold = 1U;
+                    drop_over_threshold_start_tick = sensor_data.timestamp;
+                } else if ((uint32_t)(sensor_data.timestamp - drop_over_threshold_start_tick) >= DROP_ACCEL_DURATION_MS) {
+                    drop_alert_latched = 1U;
+                    drop_alert_pending = 1U;
+                    drop_alarm_request_pending = 1U;
+                    drop_alert_timestamp = sensor_data.timestamp;
+                    drop_alert_accel_x = sensor_data.motion.accel_x;
+                    drop_alert_accel_y = sensor_data.motion.accel_y;
+                    drop_alert_accel_z = sensor_data.motion.accel_z;
+                    drop_alert_accel_magnitude = sqrtf(accel_sq);
+                    drop_over_threshold = 0U;
+                    (void)osSemaphoreRelease(mqttPublishSem);
+                    (void)osSemaphoreRelease(buzzerAlertSem);
+                }
+            } else {
+                drop_over_threshold = 0U;
+            }
+        } else {
+            drop_over_threshold = 0U;
+        }
         
         /* 检查是否需要触发MQTT发布 (每5秒) */
         if ((HAL_GetTick() - last_mqtt_tick) >= MQTT_PUBLISH_INTERVAL_MS) {
-            osSemaphoreRelease(mqttPublishSem);
+            (void)osSemaphoreRelease(mqttPublishSem);
             last_mqtt_tick = HAL_GetTick();
         }
         
@@ -469,7 +624,7 @@ void MQTTTask(void *argument)
                 
             case ESP8266_STATE_MQTT_CONNECTED:
                 ESP8266_ProcessRxData();
-                (void)App_PublishPendingEnvAlert();
+                (void)App_PublishPendingAlerts();
 
                 /* MQTT已连接，等待发布信号 */
                 if (osSemaphoreAcquire(mqttPublishSem, 100) == osOK) {
@@ -519,6 +674,15 @@ void MQTTTask(void *argument)
                 mqtt_connected = 0;
             }
         }
+
+        {
+            ESP8266_State_t current_state = ESP8266_GetState();
+            uint8_t uart_fault_active = (uint8_t)((current_state == ESP8266_STATE_ERROR) ||
+                                                  (huart3.gState == HAL_UART_STATE_RESET));
+            uint8_t spi_fault_active = (uint8_t)(hspi1.State == HAL_SPI_STATE_RESET);
+            App_SetBusFaultFlag(APP_BUS_FAULT_UART3, uart_fault_active);
+            App_SetBusFaultFlag(APP_BUS_FAULT_SPI1, spi_fault_active);
+        }
         
         osDelay(100);
     }
@@ -527,7 +691,10 @@ void MQTTTask(void *argument)
 void BuzzerTask(void *argument)
 {
     uint8_t beep_index;
+    uint8_t alarm_round;
+    uint8_t cancelled;
     uint32_t off_delay_ms;
+    KeyDebounceState_t key2_state = {0};
 
     printf("[BuzzerTask] Started\r\n");
     off_delay_ms = (BUZZER_BEEP_INTERVAL_MS > BUZZER_BEEP_ON_MS) ?
@@ -535,6 +702,37 @@ void BuzzerTask(void *argument)
 
     for (;;) {
         if (osSemaphoreAcquire(buzzerAlertSem, osWaitForever) == osOK) {
+            if (drop_alarm_request_pending != 0U) {
+                drop_alarm_request_pending = 0U;
+                cancelled = 0U;
+
+                for (alarm_round = 0U; alarm_round < DROP_ALARM_REPEAT_COUNT; alarm_round++) {
+                    Buzzer_StartTone();
+                    if (Buzzer_WaitWithCancel(DROP_ALARM_ON_MS, &key2_state) != 0U) {
+                        cancelled = 1U;
+                        Buzzer_StopTone();
+                        break;
+                    }
+                    Buzzer_StopTone();
+
+                    if ((alarm_round + 1U) < DROP_ALARM_REPEAT_COUNT) {
+                        if (Buzzer_WaitWithCancel(DROP_ALARM_GAP_MS, &key2_state) != 0U) {
+                            cancelled = 1U;
+                            break;
+                        }
+                    }
+                }
+
+                Buzzer_StopTone();
+                if (cancelled != 0U) {
+                    drop_alarm_cancel_timestamp = HAL_GetTick();
+                    drop_alarm_cancel_pending = 1U;
+                    (void)osSemaphoreRelease(mqttPublishSem);
+                }
+                drop_alert_latched = 0U;
+                continue;
+            }
+
             for (beep_index = 0U; beep_index < BUZZER_BEEP_COUNT; beep_index++) {
                 Buzzer_StartTone();
                 osDelay(BUZZER_BEEP_ON_MS);
@@ -581,38 +779,66 @@ void DisplayTask(void *argument)
   */
 void LEDTask(void *argument)
 {
+    uint32_t now;
+    uint32_t led1_last_toggle_tick = 0U;
+    uint32_t led2_last_toggle_tick = 0U;
+    uint32_t led1_toggle_interval = 500U;
+    ESP8266_State_t led1_mode = ESP8266_STATE_RESET;
+    uint8_t led1_output = 0U;
+    uint8_t led2_output = 1U;
+
     printf("[LEDTask] Started\r\n");
-    
+
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
+
     for (;;) {
-        /* 根据系统状态指示LED */
-        switch (ESP8266_GetState()) {
-            case ESP8266_STATE_MQTT_CONNECTED:
-                /* 正常工作：慢闪 */
-                HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-                osDelay(500);
-                HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-                osDelay(500);
-                break;
-                
-            case ESP8266_STATE_WIFI_CONNECTED:
-                /* WiFi已连，MQTT未连：快闪 */
-                HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-                osDelay(100);
-                HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-                osDelay(100);
-                break;
-                
-            case ESP8266_STATE_ERROR:
-                /* 错误：常亮 */
-                HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-                osDelay(1000);
-                break;
-                
-            default:
-                /* 其他状态：熄灭 */
-                HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
-                osDelay(500);
-                break;
+        ESP8266_State_t state = ESP8266_GetState();
+        now = HAL_GetTick();
+
+        if (state == ESP8266_STATE_MQTT_CONNECTED) {
+            if (led1_mode != ESP8266_STATE_MQTT_CONNECTED) {
+                led1_mode = ESP8266_STATE_MQTT_CONNECTED;
+                led1_toggle_interval = 500U;
+                led1_last_toggle_tick = now;
+                led1_output = 1U;
+            } else if ((uint32_t)(now - led1_last_toggle_tick) >= led1_toggle_interval) {
+                led1_last_toggle_tick = now;
+                led1_output = (uint8_t)((led1_output == 0U) ? 1U : 0U);
+            }
+        } else if (state == ESP8266_STATE_WIFI_CONNECTED) {
+            if (led1_mode != ESP8266_STATE_WIFI_CONNECTED) {
+                led1_mode = ESP8266_STATE_WIFI_CONNECTED;
+                led1_toggle_interval = 100U;
+                led1_last_toggle_tick = now;
+                led1_output = 1U;
+            } else if ((uint32_t)(now - led1_last_toggle_tick) >= led1_toggle_interval) {
+                led1_last_toggle_tick = now;
+                led1_output = (uint8_t)((led1_output == 0U) ? 1U : 0U);
+            }
+        } else if (state == ESP8266_STATE_ERROR) {
+            led1_mode = ESP8266_STATE_ERROR;
+            led1_output = 1U;
+            led1_last_toggle_tick = now;
+        } else {
+            led1_mode = ESP8266_STATE_RESET;
+            led1_output = 0U;
+            led1_last_toggle_tick = now;
         }
+
+        HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, (led1_output != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+        if (app_bus_fault_flags != 0U) {
+            if ((uint32_t)(now - led2_last_toggle_tick) >= LED2_FAULT_BLINK_MS) {
+                led2_last_toggle_tick = now;
+                led2_output = (uint8_t)((led2_output == 0U) ? 1U : 0U);
+            }
+        } else {
+            led2_output = 1U;
+            led2_last_toggle_tick = now;
+        }
+
+        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, (led2_output != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        osDelay(20);
     }
 }

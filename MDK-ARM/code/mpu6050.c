@@ -2,11 +2,12 @@
   ******************************************************************************
   * @file    mpu6050.c
   * @brief   MPU6050 6轴姿态传感器驱动实现
-  *          使用I2C2接口 (PA8-SDA, PA9-SCL)
+  *          自动探测I2C总线和地址（优先I2C2，兼容I2C3）
   ******************************************************************************
   */
 #include "mpu6050.h"
 #include <math.h>
+#include <stdio.h>
 
 /* 定义M_PI（如果math.h未定义） */
 #ifndef M_PI
@@ -14,11 +15,81 @@
 #endif
 
 extern I2C_HandleTypeDef hi2c2;
+extern I2C_HandleTypeDef hi2c3;
+
+#define MPU6050_ADDR_68            ((uint16_t)(0x68U << 1))
+#define MPU6050_ADDR_69            ((uint16_t)(0x69U << 1))
+#define MPU6050_I2C_TIMEOUT_MS     100U
+
+static I2C_HandleTypeDef *g_mpu_i2c = &hi2c2;
+static uint16_t g_mpu_addr = MPU6050_ADDR_68;
 
 /* 加速度灵敏度系数 (LSB/g) */
 static const float ACCEL_SENSITIVITY[4] = {16384.0f, 8192.0f, 4096.0f, 2048.0f};
 /* 陀螺仪灵敏度系数 (LSB/(°/s)) */
 static const float GYRO_SENSITIVITY[4] = {131.0f, 65.5f, 32.8f, 16.4f};
+/* 当前配置量程，用于原始值到物理量换算 */
+static MPU6050_AccelRange_t current_accel_range = MPU6050_ACCEL_RANGE_2G;
+static MPU6050_GyroRange_t current_gyro_range = MPU6050_GYRO_RANGE_250DPS;
+
+typedef struct {
+    I2C_HandleTypeDef *bus;
+    uint16_t address;
+    const char *bus_name;
+} MPU6050_ProbeTarget_t;
+
+static HAL_StatusTypeDef MPU6050_ProbeDevice(I2C_HandleTypeDef *bus, uint16_t address, uint8_t *id_out)
+{
+    HAL_StatusTypeDef status;
+
+    if ((bus == NULL) || (id_out == NULL)) {
+        return HAL_ERROR;
+    }
+
+    status = HAL_I2C_IsDeviceReady(bus, address, 2, 20);
+    if (status != HAL_OK) {
+        return status;
+    }
+
+    status = HAL_I2C_Mem_Read(bus, address, MPU6050_REG_WHO_AM_I, I2C_MEMADD_SIZE_8BIT,
+                              id_out, 1, MPU6050_I2C_TIMEOUT_MS);
+    if (status != HAL_OK) {
+        return status;
+    }
+
+    if ((*id_out != MPU6050_ID) && (*id_out != 0x69U)) {
+        return HAL_ERROR;
+    }
+
+    return HAL_OK;
+}
+
+static uint8_t MPU6050_SelectBusAndAddress(void)
+{
+    static const MPU6050_ProbeTarget_t targets[] = {
+        {&hi2c2, MPU6050_ADDR_68, "I2C2"},
+        {&hi2c2, MPU6050_ADDR_69, "I2C2"},
+        {&hi2c3, MPU6050_ADDR_68, "I2C3"},
+        {&hi2c3, MPU6050_ADDR_69, "I2C3"}
+    };
+    uint8_t i;
+    uint8_t id = 0;
+
+    for (i = 0U; i < (uint8_t)(sizeof(targets) / sizeof(targets[0])); i++) {
+        if (MPU6050_ProbeDevice(targets[i].bus, targets[i].address, &id) == HAL_OK) {
+            g_mpu_i2c = targets[i].bus;
+            g_mpu_addr = targets[i].address;
+            printf("[MPU] Detected on %s addr 0x%02X (WHO_AM_I=0x%02X)\r\n",
+                   targets[i].bus_name,
+                   (unsigned int)(targets[i].address >> 1),
+                   (unsigned int)id);
+            return 0U;
+        }
+    }
+
+    printf("[MPU] Not detected on I2C2/I2C3 (0x68/0x69)\r\n");
+    return 1U;
+}
 
 /**
   * @brief  向MPU6050寄存器写入数据
@@ -28,8 +99,8 @@ static const float GYRO_SENSITIVITY[4] = {131.0f, 65.5f, 32.8f, 16.4f};
   */
 static HAL_StatusTypeDef MPU6050_WriteReg(uint8_t reg, uint8_t data)
 {
-    uint8_t buf[2] = {reg, data};
-    return HAL_I2C_Master_Transmit(&hi2c2, MPU6050_ADDR_WRITE, buf, 2, 100);
+    return HAL_I2C_Mem_Write(g_mpu_i2c, g_mpu_addr, reg, I2C_MEMADD_SIZE_8BIT,
+                             &data, 1, MPU6050_I2C_TIMEOUT_MS);
 }
 
 /**
@@ -41,12 +112,8 @@ static HAL_StatusTypeDef MPU6050_WriteReg(uint8_t reg, uint8_t data)
   */
 static HAL_StatusTypeDef MPU6050_ReadReg(uint8_t reg, uint8_t *buf, uint16_t len)
 {
-    HAL_StatusTypeDef status;
-    
-    status = HAL_I2C_Master_Transmit(&hi2c2, MPU6050_ADDR_WRITE, &reg, 1, 100);
-    if (status != HAL_OK) return status;
-    
-    return HAL_I2C_Master_Receive(&hi2c2, MPU6050_ADDR_READ, buf, len, 100);
+    return HAL_I2C_Mem_Read(g_mpu_i2c, g_mpu_addr, reg, I2C_MEMADD_SIZE_8BIT,
+                            buf, len, MPU6050_I2C_TIMEOUT_MS);
 }
 
 /**
@@ -56,10 +123,14 @@ static HAL_StatusTypeDef MPU6050_ReadReg(uint8_t reg, uint8_t *buf, uint16_t len
 uint8_t MPU6050_Init(void)
 {
     uint8_t id;
+
+    if (MPU6050_SelectBusAndAddress() != 0U) {
+        return 1;
+    }
     
     /* 检查设备ID */
     id = MPU6050_ReadID();
-    if (id != MPU6050_ID) {
+    if ((id != MPU6050_ID) && (id != 0x69U)) {
         return 1;
     }
     
@@ -77,8 +148,8 @@ uint8_t MPU6050_Init(void)
     /* 设置低通滤波器 DLPF_CFG = 3 (41Hz带宽) */
     MPU6050_WriteReg(MPU6050_REG_CONFIG, 0x03);
     
-    /* 设置加速度计量程为 ±2g */
-    MPU6050_SetAccelRange(MPU6050_ACCEL_RANGE_2G);
+    /* 设置加速度计量程为 ±8g */
+    MPU6050_SetAccelRange(MPU6050_ACCEL_RANGE_8G);
     
     /* 设置陀螺仪量程为 ±250°/s */
     MPU6050_SetGyroRange(MPU6050_GYRO_RANGE_250DPS);
@@ -110,6 +181,7 @@ uint8_t MPU6050_ReadID(void)
 void MPU6050_SetAccelRange(MPU6050_AccelRange_t range)
 {
     MPU6050_WriteReg(MPU6050_REG_ACCEL_CONFIG, range << 3);
+    current_accel_range = range;
 }
 
 /**
@@ -119,6 +191,7 @@ void MPU6050_SetAccelRange(MPU6050_AccelRange_t range)
 void MPU6050_SetGyroRange(MPU6050_GyroRange_t range)
 {
     MPU6050_WriteReg(MPU6050_REG_GYRO_CONFIG, range << 3);
+    current_gyro_range = range;
 }
 
 /**
@@ -144,6 +217,8 @@ uint8_t MPU6050_ReadData(MPU6050_Data_t *data)
     data->gyro_z  = (int16_t)((buf[12] << 8) | buf[13]);
     
     /* 转换为物理量 */
+    data->accel_range = current_accel_range;
+    data->gyro_range = current_gyro_range;
     data->accel_x_g = data->accel_x / ACCEL_SENSITIVITY[data->accel_range];
     data->accel_y_g = data->accel_y / ACCEL_SENSITIVITY[data->accel_range];
     data->accel_z_g = data->accel_z / ACCEL_SENSITIVITY[data->accel_range];

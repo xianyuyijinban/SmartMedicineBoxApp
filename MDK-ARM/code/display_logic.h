@@ -15,7 +15,7 @@ typedef struct {
 } DisplayLogicState_t;
 
 uint8_t DisplayLogic_UpdateKey(DisplayLogicState_t *state,
-                               uint8_t key_raw_high,
+                               uint8_t key_pressed,
                                uint32_t now_ms,
                                DisplayPage_t *page);
 

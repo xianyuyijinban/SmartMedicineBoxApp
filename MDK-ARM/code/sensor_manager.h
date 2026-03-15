@@ -76,5 +76,6 @@ void SensorManager_CreateJSON(char *json_buf, uint16_t buf_size);
 uint8_t SensorManager_SetRatedEnvironment(float temperature, float humidity);
 void SensorManager_GetRatedEnvironment(float *temperature, float *humidity);
 void SensorManager_GetEnvAlertStatus(EnvironmentAlertStatus_t *status);
+uint8_t SensorManager_GetFaultMask(void);
 
 #endif /* __SENSOR_MANAGER_H */

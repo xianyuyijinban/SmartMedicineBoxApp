@@ -27,6 +27,14 @@ medicine/{device_id}/sensors
         "pressure": 101325.00,
         "altitude": 0.00
     },
+    "environment_limits": {
+        "temperature_rated": 15.00,
+        "temperature_low": 10.50,
+        "temperature_high": 19.50,
+        "humidity_rated": 50.00,
+        "humidity_low": 35.00,
+        "humidity_high": 65.00
+    },
     "motion": {
         "accel_x": 0.015,
         "accel_y": -0.008,
@@ -37,6 +45,11 @@ medicine/{device_id}/sensors
         "pitch": 2.15,
         "roll": -1.02,
         "vibration": 0.005
+    },
+    "alerts": {
+        "env_abnormal": 0,
+        "temperature_abnormal": 0,
+        "humidity_abnormal": 0
     },
     "valid": 1
 }
@@ -81,7 +94,8 @@ medicine/{device_id}/control
 medicine/{device_id}/alert
 ```
 
-设备在温湿度异常时会立即发布 `env_abnormal` 事件，并触发本地蜂鸣器 `3` 次提示（每次间隔 `1` 秒）；恢复正常后发布 `env_recovered`。
+设备在温湿度异常时会立即发布 `env_abnormal` 事件，并触发本地蜂鸣器 `3` 次提示（每次间隔 `1` 秒）；恢复正常后发布 `env_recovered`。  
+当检测到跌落（加速度 > `6G` 且持续 > `20ms`）时发布 `drop_detected`，并触发本地蜂鸣器持续报警（`5s` 响、`3s` 停，重复 `3` 次）。报警期间若用户按下 `KEY2(PB15)`，设备发布 `drop_alarm_cancelled`（`stop_push=1`）用于APP停止异常推送。
 
 ```json
 {
@@ -93,6 +107,24 @@ medicine/{device_id}/alert
     "rated_humidity": 50.00,
     "temperature_abnormal": 1,
     "humidity_abnormal": 1
+}
+
+{
+    "event": "drop_detected",
+    "timestamp": 123456999,
+    "accel_x": 6.80,
+    "accel_y": 0.32,
+    "accel_z": 1.12,
+    "accel_magnitude": 6.90,
+    "threshold_g": 6.0,
+    "duration_ms": 20
+}
+
+{
+    "event": "drop_alarm_cancelled",
+    "timestamp": 123457100,
+    "source": "key2",
+    "stop_push": 1
 }
 ```
 
@@ -126,6 +158,23 @@ medicine/{device_id}/alert
 | roll | ° | 横滚角 (-180~180) |
 | vibration | g | 振动强度 |
 
+### 4.3 环境阈值数据 (environment_limits)
+
+| 字段 | 单位 | 说明 |
+|------|------|------|
+| temperature_rated | °C | 当前温度额定值（默认15） |
+| temperature_low/high | °C | 温度异常下限/上限（额定值±30%） |
+| humidity_rated | %RH | 当前湿度额定值（默认50） |
+| humidity_low/high | %RH | 湿度异常下限/上限（额定值±30%） |
+
+### 4.4 告警状态 (alerts)
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| env_abnormal | uint8 | 温湿度是否异常（1=异常，0=正常） |
+| temperature_abnormal | uint8 | 温度是否异常 |
+| humidity_abnormal | uint8 | 湿度是否异常 |
+
 ## 5. APP开发建议
 
 ### 5.1 推荐开发框架
@@ -158,8 +207,9 @@ medicine/{device_id}/alert
 
 | 告警条件 | 级别 | 建议动作 |
 |----------|------|----------|
-| 温度>30°C或<10°C | 警告 | 推送通知 |
-| 湿度>70%或<30% | 警告 | 推送通知 |
+| 温度超出额定值±30% | 警告 | 推送通知 |
+| 湿度超出额定值±30% | 警告 | 推送通知 |
+| 加速度>6G且持续>20ms | 严重 | 立即推送通知栏 |
 | 药箱被打开(state=opened) | 信息 | 记录日志 |
 | 药箱移动中(state=moving) | 注意 | 可选通知 |
 | 设备离线 | 严重 | 推送+短信 |
@@ -211,6 +261,12 @@ class MedicineBoxClient {
             updateDeviceStatus(json)
         }
 
+        // 订阅命令响应主题
+        mqttClient.subscribe("medicine/$deviceId/control/response") { topic, message ->
+            val json = String(message.payload)
+            handleCommandResponse(json)
+        }
+
         // 订阅环境告警主题（用于通知栏推送）
         mqttClient.subscribe("medicine/$deviceId/alert") { topic, message ->
             val json = String(message.payload)
@@ -225,6 +281,19 @@ class MedicineBoxClient {
         }
         val message = MqttMessage(payload.toString().toByteArray())
         mqttClient.publish("medicine/$deviceId/control", message)
+    }
+
+    private fun handleCommandResponse(json: String) {
+        val response = JSONObject(json)
+        val cmd = response.getString("cmd")
+        val result = response.getString("result")
+
+        if (result == "ok") {
+            println("命令 $cmd 执行成功")
+        } else {
+            val errorMsg = response.optString("error_msg", "未知错误")
+            println("命令 $cmd 执行失败: $errorMsg")
+        }
     }
 
     private fun handleEnvAlert(json: String) {

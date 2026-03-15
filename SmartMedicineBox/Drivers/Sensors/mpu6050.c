@@ -14,6 +14,9 @@ extern I2C_HandleTypeDef hi2c2;
 static const float ACCEL_SENSITIVITY[4] = {16384.0f, 8192.0f, 4096.0f, 2048.0f};
 /* 陀螺仪灵敏度系数 (LSB/(°/s)) */
 static const float GYRO_SENSITIVITY[4] = {131.0f, 65.5f, 32.8f, 16.4f};
+/* 当前配置量程，用于原始值到物理量换算 */
+static MPU6050_AccelRange_t current_accel_range = MPU6050_ACCEL_RANGE_2G;
+static MPU6050_GyroRange_t current_gyro_range = MPU6050_GYRO_RANGE_250DPS;
 
 /**
   * @brief  向MPU6050寄存器写入数据
@@ -72,8 +75,8 @@ uint8_t MPU6050_Init(void)
     /* 设置低通滤波器 DLPF_CFG = 3 (41Hz带宽) */
     MPU6050_WriteReg(MPU6050_REG_CONFIG, 0x03);
     
-    /* 设置加速度计量程为 ±2g */
-    MPU6050_SetAccelRange(MPU6050_ACCEL_RANGE_2G);
+    /* 设置加速度计量程为 ±16g */
+    MPU6050_SetAccelRange(MPU6050_ACCEL_RANGE_16G);
     
     /* 设置陀螺仪量程为 ±250°/s */
     MPU6050_SetGyroRange(MPU6050_GYRO_RANGE_250DPS);
@@ -105,6 +108,7 @@ uint8_t MPU6050_ReadID(void)
 void MPU6050_SetAccelRange(MPU6050_AccelRange_t range)
 {
     MPU6050_WriteReg(MPU6050_REG_ACCEL_CONFIG, range << 3);
+    current_accel_range = range;
 }
 
 /**
@@ -114,6 +118,7 @@ void MPU6050_SetAccelRange(MPU6050_AccelRange_t range)
 void MPU6050_SetGyroRange(MPU6050_GyroRange_t range)
 {
     MPU6050_WriteReg(MPU6050_REG_GYRO_CONFIG, range << 3);
+    current_gyro_range = range;
 }
 
 /**
@@ -139,6 +144,8 @@ uint8_t MPU6050_ReadData(MPU6050_Data_t *data)
     data->gyro_z  = (int16_t)((buf[12] << 8) | buf[13]);
     
     /* 转换为物理量 */
+    data->accel_range = current_accel_range;
+    data->gyro_range = current_gyro_range;
     data->accel_x_g = data->accel_x / ACCEL_SENSITIVITY[data->accel_range];
     data->accel_y_g = data->accel_y / ACCEL_SENSITIVITY[data->accel_range];
     data->accel_z_g = data->accel_z / ACCEL_SENSITIVITY[data->accel_range];

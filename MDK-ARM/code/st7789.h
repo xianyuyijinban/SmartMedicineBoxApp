@@ -6,6 +6,83 @@
 #define ST7789_WIDTH 240U
 #define ST7789_HEIGHT 240U
 
+#define ST7789_PORT_ID_A 0U
+#define ST7789_PORT_ID_B 1U
+#define ST7789_PORT_ID_C 2U
+#define ST7789_PORT_ID_D 3U
+
+#ifndef ST7789_PANEL_DEFAULT_MADCTL
+#define ST7789_PANEL_DEFAULT_MADCTL 0x00U
+#endif
+
+#ifndef ST7789_PANEL_X_OFFSET
+#define ST7789_PANEL_X_OFFSET 0U
+#endif
+
+#ifndef ST7789_PANEL_Y_OFFSET
+#define ST7789_PANEL_Y_OFFSET 0U
+#endif
+
+#ifndef ST7789_PANEL_HAS_SECONDARY_RESET
+#define ST7789_PANEL_HAS_SECONDARY_RESET 0U
+#endif
+
+#ifndef ST7789_PANEL_HAS_SECONDARY_DC
+#define ST7789_PANEL_HAS_SECONDARY_DC 0U
+#endif
+
+#ifndef ST7789_PANEL_HAS_SECONDARY_BACKLIGHT
+#define ST7789_PANEL_HAS_SECONDARY_BACKLIGHT 0U
+#endif
+
+#ifndef ST7789_BOARD_RESET_PORT_ID
+#define ST7789_BOARD_RESET_PORT_ID ST7789_PORT_ID_C
+#endif
+
+#ifndef ST7789_BOARD_RESET_PIN_NUMBER
+#define ST7789_BOARD_RESET_PIN_NUMBER 4U
+#endif
+
+#ifndef ST7789_BOARD_DC_PORT_ID
+#define ST7789_BOARD_DC_PORT_ID ST7789_PORT_ID_C
+#endif
+
+#ifndef ST7789_BOARD_DC_PIN_NUMBER
+#define ST7789_BOARD_DC_PIN_NUMBER 5U
+#endif
+
+#ifndef ST7789_BOARD_BL_PORT_ID
+#define ST7789_BOARD_BL_PORT_ID ST7789_PORT_ID_B
+#endif
+
+#ifndef ST7789_BOARD_BL_PIN_NUMBER
+#define ST7789_BOARD_BL_PIN_NUMBER 0U
+#endif
+
+#ifndef ST7789_STARTUP_SELF_TEST
+#define ST7789_STARTUP_SELF_TEST 1U
+#endif
+
+#ifndef ST7789_STARTUP_SELF_TEST_STEP_MS
+#define ST7789_STARTUP_SELF_TEST_STEP_MS 500U
+#endif
+
+#ifndef ST7789_BACKLIGHT_ENABLE_BEFORE_SELF_TEST
+#define ST7789_BACKLIGHT_ENABLE_BEFORE_SELF_TEST ST7789_STARTUP_SELF_TEST
+#endif
+
+#ifndef ST7789_X_OFFSET
+#define ST7789_X_OFFSET ST7789_PANEL_X_OFFSET
+#endif
+
+#ifndef ST7789_Y_OFFSET
+#define ST7789_Y_OFFSET ST7789_PANEL_Y_OFFSET
+#endif
+
+#ifndef ST7789_DEFAULT_MADCTL
+#define ST7789_DEFAULT_MADCTL ST7789_PANEL_DEFAULT_MADCTL
+#endif
+
 #define ST7789_COLOR_BLACK   0x0000U
 #define ST7789_COLOR_BLUE    0x001FU
 #define ST7789_COLOR_RED     0xF800U
@@ -24,6 +101,8 @@ void ST7789_FillScreen(uint16_t color);
 void ST7789_DrawPixel(uint16_t x, uint16_t y, uint16_t color);
 void ST7789_DrawChar(uint16_t x, uint16_t y, char ch, uint16_t fg, uint16_t bg);
 void ST7789_DrawString(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg);
+void ST7789_DrawChar2x(uint16_t x, uint16_t y, char ch, uint16_t fg, uint16_t bg);
+void ST7789_DrawString2x(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg);
 #endif
 
 #endif /* ST7789_H */

@@ -3,7 +3,7 @@
 #define DISPLAY_KEY_DEBOUNCE_MS 50U
 
 uint8_t DisplayLogic_UpdateKey(DisplayLogicState_t *state,
-                               uint8_t key_raw_high,
+                               uint8_t key_pressed,
                                uint32_t now_ms,
                                DisplayPage_t *page) {
     if (state == 0 || page == 0) {
@@ -11,7 +11,7 @@ uint8_t DisplayLogic_UpdateKey(DisplayLogicState_t *state,
     }
 
     if (state->key_pressed_latched == 0U) {
-        if (key_raw_high != 0U) {
+        if (key_pressed != 0U) {
             if (state->key_armed == 0U) {
                 state->key_armed = 1U;
                 state->key_press_tick = now_ms;
@@ -24,7 +24,7 @@ uint8_t DisplayLogic_UpdateKey(DisplayLogicState_t *state,
         } else {
             state->key_armed = 0U;
         }
-    } else if (key_raw_high == 0U) {
+    } else if (key_pressed == 0U) {
         state->key_pressed_latched = 0U;
     }
 

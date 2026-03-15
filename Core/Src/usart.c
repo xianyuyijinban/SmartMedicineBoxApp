@@ -93,7 +93,9 @@ void MX_USART3_UART_Init(void)
   huart3.Init.OverSampling = UART_OVERSAMPLING_16;
   huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  /* PCB上ESP-01S的TX/RX与MCU USART3方向同向，需启用内部Swap进行交叉。 */
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_SWAP_INIT;
+  huart3.AdvancedInit.Swap = UART_ADVFEATURE_SWAP_ENABLE;
   if (HAL_UART_Init(&huart3) != HAL_OK)
   {
     Error_Handler();
@@ -111,6 +113,10 @@ void MX_USART3_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART3_Init 2 */
+  /* 强制开启TX/RX引脚交换。某些HAL路径下AdvancedInit不会保持该位。 */
+  __HAL_UART_DISABLE(&huart3);
+  SET_BIT(huart3.Instance->CR2, USART_CR2_SWAP);
+  __HAL_UART_ENABLE(&huart3);
 
   /* USER CODE END USART3_Init 2 */
 

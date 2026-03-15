@@ -1,0 +1,19 @@
+#include <assert.h>
+#include "st7789.h"
+
+int main(void) {
+    assert(ST7789_PANEL_DEFAULT_MADCTL == 0x00U);
+    assert(ST7789_PANEL_X_OFFSET == 0U);
+    assert(ST7789_PANEL_Y_OFFSET == 0U);
+    assert(ST7789_PANEL_HAS_SECONDARY_RESET == 0U);
+    assert(ST7789_PANEL_HAS_SECONDARY_DC == 0U);
+    assert(ST7789_PANEL_HAS_SECONDARY_BACKLIGHT == 0U);
+    assert(ST7789_BOARD_RESET_PORT_ID == ST7789_PORT_ID_C);
+    assert(ST7789_BOARD_RESET_PIN_NUMBER == 4U);
+    assert(ST7789_BOARD_DC_PORT_ID == ST7789_PORT_ID_C);
+    assert(ST7789_BOARD_DC_PIN_NUMBER == 5U);
+    assert(ST7789_BOARD_BL_PORT_ID == ST7789_PORT_ID_B);
+    assert(ST7789_BOARD_BL_PIN_NUMBER == 0U);
+    assert(ST7789_BACKLIGHT_ENABLE_BEFORE_SELF_TEST == 1U);
+    return 0;
+}
