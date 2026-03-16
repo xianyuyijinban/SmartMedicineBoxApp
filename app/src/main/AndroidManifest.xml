@@ -1,19 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.smartmedicine">
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 网络权限 -->
+    <!-- ============================================
+         网络权限 - 所有API级别通用
+         ============================================ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     
-    <!-- MQTT服务需要的前台服务权限 (Android 9+) -->
+    <!-- ============================================
+         MQTT服务前台服务权限
+         API 28+ 需要 FOREGROUND_SERVICE
+         API 34+ 需要声明具体的前台服务类型
+         ============================================ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- API 34+ (Android 14+) 需要指定前台服务类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     
-    <!-- 通知权限 (Android 13+) -->
+    <!-- ============================================
+         通知权限 - API 33+ (Android 13+)
+         ============================================ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- ============================================
+         闹钟权限 - API 31+ (Android 12+)
+         用于精确的MQTT心跳检测
+         ============================================ -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- API 33+ 使用 USE_EXACT_ALARM 替代 SCHEDULE_EXACT_ALARM (更精确) -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    
+    <!-- ============================================
+         电源优化权限 - 保持后台连接
+         ============================================ -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".SmartMedicineApp"
@@ -22,26 +44,52 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.SmartMedicineBoxApp"
         android:usesCleartextTraffic="true"
-        tools:targetApi="31">
+        android:enableOnBackInvokedCallback="true"
+        tools:targetApi="35">
 
-        <!-- MQTT Service -->
+        <!-- ============================================
+             MQTT Service - 指定前台服务类型
+             API 34+ 必须声明前台服务类型
+             ============================================ -->
         <service
             android:name="org.eclipse.paho.android.service.MqttService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
+        <!-- ============================================
+             主Activity
+             支持预测性返回手势 (API 35)
+             大屏幕适配 (API 32+)
+             ============================================ -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.SmartMedicineBoxApp">
+            android:theme="@style/Theme.SmartMedicineBoxApp"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            
+            <!-- ============================================
+                 多窗口模式支持 - API 32+ 大屏幕优化
+                 ============================================ -->
+            <layout
+                android:defaultHeight="600dp"
+                android:defaultWidth="400dp"
+                android:gravity="center"
+                android:minHeight="450dp"
+                android:minWidth="320dp" />
         </activity>
+        
+        <!-- ============================================
+             通知渠道配置 (API 26+)
+             ============================================ -->
 
     </application>
 

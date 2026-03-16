@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 32+ (Android 12L) 大屏幕设备主题优化
+    支持窗口尺寸类别、多窗口模式
+-->
+<resources>
+    
+    <!-- 大屏幕优化主题 - 继承基础主题 -->
+    <style name="Theme.SmartMedicineBoxApp.LargeScreen" parent="Theme.SmartMedicineBoxApp">
+        <!-- 多窗口模式支持 -->
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+        
+        <!-- 支持跨窗口拖放 -->
+        <item name="android:windowEnableSplitTouch">true</item>
+        
+        <!-- 优化大屏设备上的对话框显示 -->
+        <item name="android:dialogCornerRadius">28dp</item>
+        
+        <!-- 支持Activity嵌入 -->
+        <item name="android:windowSwipeToDismiss">false</item>
+    </style>
+    
+</resources>

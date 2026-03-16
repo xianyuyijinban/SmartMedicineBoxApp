@@ -58,8 +58,7 @@ fun EnvironmentDataCardPreview() {
     SmartMedicineBoxTheme {
         EnvironmentDataCard(
             temperature = 25.3,
-            humidity = 55.5,
-            pressure = 101325.0
+            humidity = 55.5
         )
     }
 }
@@ -70,8 +69,7 @@ fun EnvironmentDataCardNullPreview() {
     SmartMedicineBoxTheme {
         EnvironmentDataCard(
             temperature = null,
-            humidity = null,
-            pressure = null
+            humidity = null
         )
     }
 }
@@ -83,7 +81,6 @@ fun DetailedEnvironmentCardPreview() {
         DetailedEnvironmentCard(
             temperature = 25.3,
             humidity = 55.5,
-            pressure = 101325.0,
             altitude = 50.0
         )
     }
@@ -96,6 +93,7 @@ fun DetailedEnvironmentCardPreview() {
 fun BoxStatusCardClosedPreview() {
     SmartMedicineBoxTheme {
         BoxStatusCard(
+            isOnline = true,
             state = "closed",
             vibration = 0.005,
             pitch = 1.0,
@@ -109,6 +107,7 @@ fun BoxStatusCardClosedPreview() {
 fun BoxStatusCardOpenedPreview() {
     SmartMedicineBoxTheme {
         BoxStatusCard(
+            isOnline = true,
             state = "opened",
             vibration = 0.01,
             pitch = 45.0,
@@ -122,6 +121,7 @@ fun BoxStatusCardOpenedPreview() {
 fun BoxStatusCardMovingPreview() {
     SmartMedicineBoxTheme {
         BoxStatusCard(
+            isOnline = true,
             state = "moving",
             vibration = 0.8,
             pitch = 5.0,
@@ -135,6 +135,7 @@ fun BoxStatusCardMovingPreview() {
 fun BoxStatusCardTiltedPreview() {
     SmartMedicineBoxTheme {
         BoxStatusCard(
+            isOnline = true,
             state = "tilted",
             vibration = 0.1,
             pitch = 35.0,
@@ -188,6 +189,9 @@ fun ControlButtonsSectionConnectedPreview() {
             onRefresh = {},
             onReset = {},
             onSetInterval = {},
+            onSetEnvRated = { _, _ -> },
+            onSetBuzzerEnabled = {},
+            buzzerEnabled = true,
             isConnected = true
         )
     }
@@ -201,6 +205,9 @@ fun ControlButtonsSectionDisconnectedPreview() {
             onRefresh = {},
             onReset = {},
             onSetInterval = {},
+            onSetEnvRated = { _, _ -> },
+            onSetBuzzerEnabled = {},
+            buzzerEnabled = false,
             isConnected = false
         )
     }
@@ -251,7 +258,10 @@ fun HomeScreenOnlinePreview() {
             onRefresh = {},
             onReset = {},
             onSetInterval = {},
-            onNavigateToSettings = {}
+            onSetEnvRated = { _, _ -> },
+            onSetBuzzerEnabled = {},
+            onNavigateToSettings = {},
+            onNavigateToHistory = {}
         )
     }
 }
@@ -278,7 +288,10 @@ fun HomeScreenOfflinePreview() {
             onRefresh = {},
             onReset = {},
             onSetInterval = {},
-            onNavigateToSettings = {}
+            onSetEnvRated = { _, _ -> },
+            onSetBuzzerEnabled = {},
+            onNavigateToSettings = {},
+            onNavigateToHistory = {}
         )
     }
 }
@@ -331,7 +344,10 @@ fun HomeScreenWithAlertsPreview() {
             onRefresh = {},
             onReset = {},
             onSetInterval = {},
-            onNavigateToSettings = {}
+            onSetEnvRated = { _, _ -> },
+            onSetBuzzerEnabled = {},
+            onNavigateToSettings = {},
+            onNavigateToHistory = {}
         )
     }
 }
@@ -350,7 +366,7 @@ fun SettingsScreenDisconnectedPreview() {
                 isConnecting = false,
                 errorMessage = null
             ),
-            onSaveSettings = { _, _ -> },
+            onSaveSettings = { _, _, _, _ -> },
             onConnect = {},
             onDisconnect = {},
             onNavigateBack = {}
@@ -370,7 +386,7 @@ fun SettingsScreenConnectedPreview() {
                 isConnecting = false,
                 errorMessage = null
             ),
-            onSaveSettings = { _, _ -> },
+            onSaveSettings = { _, _, _, _ -> },
             onConnect = {},
             onDisconnect = {},
             onNavigateBack = {}
@@ -390,7 +406,7 @@ fun SettingsScreenConnectingPreview() {
                 isConnecting = true,
                 errorMessage = null
             ),
-            onSaveSettings = { _, _ -> },
+            onSaveSettings = { _, _, _, _ -> },
             onConnect = {},
             onDisconnect = {},
             onNavigateBack = {}

@@ -45,7 +45,6 @@
         
         <!-- 导航栏 -->
         <item name="android:navigationBarColor">@color/md_theme_surface</item>
-        <item name="android:windowLightNavigationBar">true</item>
         
         <!-- 组件样式 -->
         <item name="materialCardViewElevatedStyle">@style/Widget.App.CardView</item>

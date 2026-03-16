@@ -15,18 +15,16 @@ import com.smartmedicine.ui.theme.*
 
 /**
  * 环境数据卡片组件
- * 显示温度、湿度、气压
+ * 显示温度、湿度
  * 
  * @param temperature 温度值(°C)
  * @param humidity 湿度值(%)
- * @param pressure 气压值(Pa)
  * @param modifier 修饰符
  */
 @Composable
 fun EnvironmentDataCard(
     temperature: Double?,
     humidity: Double?,
-    pressure: Double?,
     modifier: Modifier = Modifier
 ) {
     ElevatedCard(
@@ -50,7 +48,7 @@ fun EnvironmentDataCard(
             
             Divider(color = MaterialTheme.colorScheme.outlineVariant)
             
-            // 三个数据项
+            // 两个数据项
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -77,21 +75,6 @@ fun EnvironmentDataCard(
                     value = humidity,
                     unit = "%",
                     color = HumidityColor,
-                    modifier = Modifier.weight(1f)
-                )
-                
-                VerticalDivider(
-                    modifier = Modifier.height(60.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
-                )
-                
-                // 气压 (转换为hPa)
-                EnvironmentItem(
-                    icon = "🌀",
-                    label = "气压",
-                    value = pressure?.let { it / 100.0 }, // Pa to hPa
-                    unit = "hPa",
-                    color = PressureColor,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -164,7 +147,6 @@ private fun EnvironmentItem(
 fun DetailedEnvironmentCard(
     temperature: Double?,
     humidity: Double?,
-    pressure: Double?,
     altitude: Double?,
     modifier: Modifier = Modifier
 ) {
@@ -206,14 +188,6 @@ fun DetailedEnvironmentCard(
                     unit = "%",
                     color = HumidityColor,
                     normalRange = 30.0..70.0
-                )
-                
-                DataRow(
-                    icon = "🌀",
-                    label = "气压",
-                    value = pressure?.let { it / 100.0 },
-                    unit = "hPa",
-                    color = PressureColor
                 )
                 
                 altitude?.let {

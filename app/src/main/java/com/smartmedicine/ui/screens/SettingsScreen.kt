@@ -6,11 +6,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.smartmedicine.ui.components.dialog.MqttTutorialDialog
 
 /**
  * 设置屏幕界面
@@ -33,7 +30,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SettingsScreen(
     settingsState: SettingsUiState,
-    onSaveSettings: (String, String) -> Unit,
+    onSaveSettings: (String, String, String, String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onNavigateBack: () -> Unit,
@@ -41,12 +38,31 @@ fun SettingsScreen(
 ) {
     var mqttBroker by remember { mutableStateOf(settingsState.mqttBroker) }
     var deviceId by remember { mutableStateOf(settingsState.deviceId) }
+    var mqttUsername by remember { mutableStateOf(settingsState.mqttUsername) }
+    var mqttPassword by remember { mutableStateOf(settingsState.mqttPassword) }
     
     // 输入验证
     var mqttError by remember { mutableStateOf<String?>(null) }
     var deviceIdError by remember { mutableStateOf<String?>(null) }
+    var authError by remember { mutableStateOf<String?>(null) }
+    
+    // 教程对话框显示状态
+    var showTutorialDialog by remember { mutableStateOf(false) }
     
     val scrollState = rememberScrollState()
+
+    fun validateAndUpdateErrors(): Boolean {
+        val validation = validateSettingsInputs(
+            mqttBroker = mqttBroker,
+            deviceId = deviceId,
+            mqttUsername = mqttUsername,
+            mqttPassword = mqttPassword
+        )
+        mqttError = validation.mqttError
+        deviceIdError = validation.deviceIdError
+        authError = validation.authError
+        return validation.isValid
+    }
     
     Scaffold(
         modifier = modifier,
@@ -64,8 +80,8 @@ fun SettingsScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            if (validateInputs(mqttBroker, deviceId)) {
-                                onSaveSettings(mqttBroker, deviceId)
+                            if (validateAndUpdateErrors()) {
+                                onSaveSettings(mqttBroker, deviceId, mqttUsername, mqttPassword)
                             }
                         }
                     ) {
@@ -129,7 +145,7 @@ fun SettingsScreen(
                         deviceIdError = null
                     },
                     label = { Text("设备ID") },
-                    placeholder = { Text("例如: medicine_box_001") },
+                    placeholder = { Text("例如: box001") },
                     leadingIcon = { Icon(Icons.Default.Devices, contentDescription = null) },
                     supportingText = {
                         Text("设备唯一标识符，用于MQTT主题")
@@ -143,6 +159,55 @@ fun SettingsScreen(
                 )
                 
                 deviceIdError?.let {
+                    Text(
+                        text = it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            // MQTT 鉴权设置
+            SettingsSection(title = "MQTT 鉴权") {
+                OutlinedTextField(
+                    value = mqttUsername,
+                    onValueChange = {
+                        mqttUsername = it
+                        authError = null
+                    },
+                    label = { Text("用户名") },
+                    placeholder = { Text("例如: yunmenglin") },
+                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                    supportingText = {
+                        Text("EMQX账号用户名（如Broker开启鉴权需填写）")
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Next
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = mqttPassword,
+                    onValueChange = {
+                        mqttPassword = it
+                        authError = null
+                    },
+                    label = { Text("密码") },
+                    placeholder = { Text("MQTT密码") },
+                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                    supportingText = {
+                        Text("EMQX账号密码")
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Done
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                authError?.let {
                     Text(
                         text = it,
                         color = MaterialTheme.colorScheme.error,
@@ -220,11 +285,11 @@ fun SettingsScreen(
                         } else {
                             Button(
                                 onClick = {
-                                    if (validateInputs(mqttBroker, deviceId)) {
-                                        onSaveSettings(mqttBroker, deviceId)
-                                        onConnect()
-                                    }
-                                },
+                                if (validateAndUpdateErrors()) {
+                                    onSaveSettings(mqttBroker, deviceId, mqttUsername, mqttPassword)
+                                    onConnect()
+                                }
+                            },
                                 enabled = !settingsState.isConnecting
                             ) {
                                 if (settingsState.isConnecting) {
@@ -240,14 +305,47 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            settingsState.errorMessage?.let { message ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Error,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "连接失败：$message",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+            
+            // 连接教程卡片
+            SettingsSection(title = "帮助") {
+                TutorialCard(onClick = { showTutorialDialog = true })
+            }
             
             // 操作按钮
             SettingsSection(title = "操作") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            if (validateInputs(mqttBroker, deviceId)) {
-                                onSaveSettings(mqttBroker, deviceId)
+                            if (validateAndUpdateErrors()) {
+                                onSaveSettings(mqttBroker, deviceId, mqttUsername, mqttPassword)
                                 onNavigateBack()
                             }
                         },
@@ -283,6 +381,7 @@ fun SettingsScreen(
                     Text(
                         text = "• MQTT Broker 地址需要包含协议和端口\n" +
                                "• 设备ID需要与药箱设备配置一致\n" +
+                               "• EMQX开启鉴权时用户名/密码不能为空\n" +
                                "• 修改设置后需要重新连接",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -291,6 +390,67 @@ fun SettingsScreen(
             }
             
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+    
+    // 显示教程对话框
+    if (showTutorialDialog) {
+        MqttTutorialDialog(
+            onDismiss = { showTutorialDialog = false }
+        )
+    }
+}
+
+/**
+ * 教程入口卡片
+ * 
+ * @param onClick 点击回调
+ */
+@Composable
+private fun TutorialCard(
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MenuBook,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Column {
+                    Text(
+                        text = "连接教程",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                    Text(
+                        text = "查看MQTT服务器配置说明",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = "查看",
+                tint = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
+            )
         }
     }
 }
@@ -316,19 +476,51 @@ private fun SettingsSection(
 /**
  * 验证输入
  */
-private fun validateInputs(mqttBroker: String, deviceId: String): Boolean {
-    if (mqttBroker.isBlank()) return false
-    if (deviceId.isBlank()) return false
-    if (!mqttBroker.startsWith("tcp://") && !mqttBroker.startsWith("ssl://")) return false
-    return true
+internal fun validateSettingsInputs(
+    mqttBroker: String,
+    deviceId: String,
+    mqttUsername: String = "",
+    mqttPassword: String = ""
+): SettingsValidationResult {
+    val brokerValid = BrokerInputValidator.isValidBroker(mqttBroker)
+    val deviceValid = BrokerInputValidator.isValidDeviceId(deviceId)
+    val authValid = !(mqttUsername.isBlank() xor mqttPassword.isBlank())
+
+    return SettingsValidationResult(
+        isValid = brokerValid && deviceValid && authValid,
+        mqttError = if (brokerValid) {
+            null
+        } else {
+            "MQTT Broker 地址格式错误，应为 tcp://host:port 或 ssl://host:port"
+        },
+        deviceIdError = if (deviceValid) {
+            null
+        } else {
+            "设备ID仅支持字母、数字、下划线和中划线（1-64位）"
+        },
+        authError = if (authValid) {
+            null
+        } else {
+            "用户名和密码需同时填写，或同时留空"
+        }
+    )
 }
+
+internal data class SettingsValidationResult(
+    val isValid: Boolean,
+    val mqttError: String?,
+    val deviceIdError: String?,
+    val authError: String?
+)
 
 /**
  * 设置UI状态
  */
 data class SettingsUiState(
-    val mqttBroker: String = "tcp://192.168.1.100:1883",
-    val deviceId: String = "medicine_box_001",
+    val mqttBroker: String = "ssl://jaf12a6c.ala.cn-hangzhou.emqxsl.cn:8883",
+    val deviceId: String = "box001",
+    val mqttUsername: String = "yunmenglin",
+    val mqttPassword: String = "12345678y",
     val isConnected: Boolean = false,
     val isConnecting: Boolean = false,
     val errorMessage: String? = null

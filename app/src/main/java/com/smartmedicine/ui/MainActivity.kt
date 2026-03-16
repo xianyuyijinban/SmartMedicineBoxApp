@@ -11,31 +11,33 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.smartmedicine.box.manager.OfflineDetector
+import com.smartmedicine.data.model.AlertEvent
 import com.smartmedicine.data.model.CommandResponse
 import com.smartmedicine.data.model.DeviceStatus
+import com.smartmedicine.data.model.EnvironmentLimitsData
 import com.smartmedicine.data.model.SensorData
 import com.smartmedicine.mqtt.MqttManager
 import com.smartmedicine.notification.NotificationManager
-import com.smartmedicine.repository.HistoryRepository
-import com.smartmedicine.ui.screens.*
+import com.smartmedicine.ui.components.AlertLevel
+import com.smartmedicine.ui.screens.AlertItem
+import com.smartmedicine.ui.screens.HistoryScreen
+import com.smartmedicine.ui.screens.HomeScreen
+import com.smartmedicine.ui.screens.HomeUiState
+import com.smartmedicine.ui.screens.SettingsScreen
+import com.smartmedicine.ui.screens.SettingsUiState
 import com.smartmedicine.ui.theme.SmartMedicineBoxTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.collectLatest
-import androidx.lifecycle.viewModelScope
 import timber.log.Timber
 
 /**
@@ -46,21 +48,16 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private lateinit var notificationManager: NotificationManager
-    
+
     // 默认配置
     companion object {
         // 本地MQTT Broker配置
-        const val DEFAULT_MQTT_BROKER = "tcp://192.168.1.100:1883"
-        const val DEFAULT_DEVICE_ID = "medicine_box_001"
-        
-        // 阿里云IoT MQTT配置（示例）
-        // 请替换为你的实际设备信息
-        const val ALIYUN_PRODUCT_KEY = "your_product_key"
-        const val ALIYUN_DEVICE_NAME = "your_device_name"
-        const val ALIYUN_DEVICE_SECRET = "your_device_secret"
-        const val ALIYUN_REGION = "cn-shanghai"
+        const val DEFAULT_MQTT_BROKER = "ssl://jaf12a6c.ala.cn-hangzhou.emqxsl.cn:8883"
+        const val DEFAULT_DEVICE_ID = "box001"
+        const val DEFAULT_MQTT_USERNAME = "yunmenglin"
+        const val DEFAULT_MQTT_PASSWORD = "12345678y"
     }
-    
+
     // 通知权限请求（Android 13+）
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -74,16 +71,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         // 初始化Timber日志
         if (Timber.treeCount == 0) {
             Timber.plant(Timber.DebugTree())
         }
-        
+
         // 初始化通知管理器
         notificationManager = NotificationManager.getInstance(this)
         viewModel.setNotificationManager(notificationManager)
-        
+
         // 请求通知权限（Android 13+）
         requestNotificationPermission()
 
@@ -98,7 +95,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
+
     /**
      * 请求通知权限
      */
@@ -111,7 +108,6 @@ class MainActivity : ComponentActivity() {
                     Timber.d("通知权限已存在")
                 }
                 shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
-                    // 可以在这里显示解释为什么需要通知权限
                     requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
                 else -> {
@@ -123,7 +119,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        viewModel.disconnect()
     }
 }
 
@@ -133,11 +128,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SmartMedicineBoxApp(viewModel: MainViewModel) {
     val navController = rememberNavController()
-    
+
     // 收集状态
     val uiState by viewModel.uiState.collectAsState()
     val settingsState by viewModel.settingsState.collectAsState()
-    
+
     NavHost(
         navController = navController,
         startDestination = "home"
@@ -149,6 +144,12 @@ fun SmartMedicineBoxApp(viewModel: MainViewModel) {
                 onRefresh = { viewModel.publishNow() },
                 onReset = { viewModel.resetDevice() },
                 onSetInterval = { interval -> viewModel.setInterval(interval) },
+                onSetEnvRated = { temperature, humidity ->
+                    viewModel.setEnvironmentRated(temperature, humidity)
+                },
+                onSetBuzzerEnabled = { enabled ->
+                    viewModel.setBuzzerEnabled(enabled)
+                },
                 onNavigateToSettings = {
                     navController.navigate("settings")
                 },
@@ -157,13 +158,13 @@ fun SmartMedicineBoxApp(viewModel: MainViewModel) {
                 }
             )
         }
-        
+
         // 设置屏幕
         composable("settings") {
             SettingsScreen(
                 settingsState = settingsState,
-                onSaveSettings = { broker, deviceId ->
-                    viewModel.updateSettings(broker, deviceId)
+                onSaveSettings = { broker, deviceId, username, password ->
+                    viewModel.updateSettings(broker, deviceId, username, password)
                 },
                 onConnect = { viewModel.connect() },
                 onDisconnect = { viewModel.disconnect() },
@@ -172,12 +173,10 @@ fun SmartMedicineBoxApp(viewModel: MainViewModel) {
                 }
             )
         }
-        
+
         // 历史数据屏幕
         composable("history") {
             HistoryScreen(
-                deviceId = settingsState.deviceId,
-                historyRepository = viewModel.getHistoryRepository(),
                 onNavigateBack = {
                     navController.popBackStack()
                 }
@@ -191,29 +190,38 @@ fun SmartMedicineBoxApp(viewModel: MainViewModel) {
  * 管理UI状态和业务逻辑
  */
 class MainViewModel(application: android.app.Application) : androidx.lifecycle.AndroidViewModel(application) {
-    
+
     private val mqttManager = MqttManager()
-    
-    // 离线检测器 - 15秒超时（3个publish间隔）
-    private val offlineDetector = OfflineDetector.getInstance()
-    
+
     // 通知管理器（由Activity注入）
     private var notificationManager: NotificationManager? = null
-    
-    // 历史数据仓库
-    private val historyRepository = HistoryRepository.getInstance(application)
-    
+
     // UI状态
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
-    
+
     // 设置状态
     private val _settingsState = MutableStateFlow(SettingsUiState())
     val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
-    
-    // 上次通知状态（避免重复通知）
-    private var lastAlertStates = mutableMapOf<String, Boolean>()
-    
+
+    // 上次告警状态（用于UI去抖）
+    private val lastAlertStates = mutableMapOf<String, Boolean>()
+
+    // 告警历史记录
+    private val alertHistory = mutableListOf<AlertRecord>()
+
+    // 最新的设备事件告警（由 alert 主题上报）
+    private var latestEventAlert: AlertItem? = null
+
+    // 由设备 drop_alarm_cancelled(stop_push=1) 控制的 APP 推送静默开关
+    private var alertPushSuppressed = false
+
+    companion object {
+        private const val DEFAULT_RATED_TEMP = 15.0
+        private const val DEFAULT_RATED_HUMIDITY = 50.0
+        private const val ENV_ABNORMAL_RATIO = 0.30
+    }
+
     init {
         // 初始化状态
         _uiState.value = HomeUiState(
@@ -221,120 +229,74 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
         )
         _settingsState.value = SettingsUiState(
             mqttBroker = MainActivity.DEFAULT_MQTT_BROKER,
-            deviceId = MainActivity.DEFAULT_DEVICE_ID
+            deviceId = MainActivity.DEFAULT_DEVICE_ID,
+            mqttUsername = MainActivity.DEFAULT_MQTT_USERNAME,
+            mqttPassword = MainActivity.DEFAULT_MQTT_PASSWORD
         )
-        
-        // 设置离线检测回调
-        setupOfflineDetector()
     }
-    
+
     /**
      * 设置通知管理器（由Activity注入）
      */
     fun setNotificationManager(manager: NotificationManager) {
         this.notificationManager = manager
     }
-    
-    /**
-     * 获取历史数据仓库
-     */
-    fun getHistoryRepository(): HistoryRepository = historyRepository
-    
-    /**
-     * 设置离线检测器回调
-     */
-    private fun setupOfflineDetector() {
-        offlineDetector.addCallback(object : OfflineDetector.OfflineCallback {
-            override fun onDeviceOffline(offlineDuration: Long) {
-                val deviceId = _settingsState.value.deviceId
-                _uiState.update { 
-                    it.copy(
-                        isOnline = false,
-                        offlineDuration = offlineDuration
-                    )
-                }
-                // 发送离线通知
-                notificationManager?.notifyDeviceOffline(deviceId, offlineDuration)
-                Timber.w("设备离线检测触发，已离线 ${offlineDuration}ms")
-            }
 
-            override fun onDeviceOnline(offlineDuration: Long) {
-                val deviceId = _settingsState.value.deviceId
-                _uiState.update { it.copy(isOnline = true) }
-                // 发送恢复在线通知
-                notificationManager?.notifyDeviceOnline(deviceId)
-                Timber.i("设备恢复在线，之前离线 ${offlineDuration}ms")
-            }
-
-            override fun onHeartbeatUpdated(heartbeatTime: Long) {
-                // 心跳更新，可以在这里更新UI显示最后心跳时间
-            }
-        })
-    }
-    
     /**
      * 连接到MQTT Broker
      */
     fun connect() {
         val settings = _settingsState.value
-        
+
         _settingsState.update { it.copy(isConnecting = true, errorMessage = null) }
         _uiState.update { it.copy(isConnecting = true) }
-        
-        // 重置离线检测器
-        offlineDetector.reset()
-        
+
         try {
             val clientId = "AndroidApp_${System.currentTimeMillis()}"
-            
+
             mqttManager.connect(
                 brokerUrl = settings.mqttBroker,
                 clientId = clientId,
                 deviceId = settings.deviceId,
+                username = settings.mqttUsername,
+                password = settings.mqttPassword,
                 onConnected = {
                     _settingsState.update { it.copy(isConnected = true, isConnecting = false) }
-                    _uiState.update { 
+                    _uiState.update {
                         it.copy(
-                            isOnline = true, 
+                            isOnline = true,
                             isConnecting = false,
                             deviceId = settings.deviceId
                         )
                     }
-                    // 启动离线检测
-                    offlineDetector.start()
-                    Timber.d("MQTT连接成功，离线检测已启动")
+                    Timber.d("MQTT连接成功")
                 },
                 onDisconnected = {
                     _settingsState.update { it.copy(isConnected = false, isConnecting = false) }
-                    _uiState.update { 
+                    _uiState.update {
                         it.copy(
-                            isOnline = false, 
+                            isOnline = false,
                             isConnecting = false
                         )
                     }
-                    // 停止离线检测
-                    offlineDetector.stop()
-                    Timber.d("MQTT连接断开，离线检测已停止")
+                    Timber.d("MQTT连接断开")
                 },
                 onSensorDataReceived = { data ->
-                    // 更新心跳（收到传感器数据视为心跳）
-                    offlineDetector.updateHeartbeat()
                     handleSensorData(data)
                 },
                 onStatusReceived = { status ->
-                    // 状态消息也更新心跳
-                    if (status.isOnline()) {
-                        offlineDetector.updateHeartbeat()
-                    }
                     handleDeviceStatus(status)
                 },
                 onCommandResponseReceived = { response ->
                     handleCommandResponse(response)
                 },
+                onAlertEventReceived = { event ->
+                    handleAlertEvent(event)
+                },
                 onError = { error ->
-                    _settingsState.update { 
+                    _settingsState.update {
                         it.copy(
-                            isConnecting = false, 
+                            isConnecting = false,
                             errorMessage = error
                         )
                     }
@@ -343,9 +305,9 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
                 }
             )
         } catch (e: Exception) {
-            _settingsState.update { 
+            _settingsState.update {
                 it.copy(
-                    isConnecting = false, 
+                    isConnecting = false,
                     errorMessage = e.message
                 )
             }
@@ -353,112 +315,266 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
             Timber.e(e, "连接失败")
         }
     }
-    
+
     /**
      * 断开连接
      */
     fun disconnect() {
         mqttManager.disconnect()
-        offlineDetector.stop()
         _settingsState.update { it.copy(isConnected = false, isConnecting = false) }
         _uiState.update { it.copy(isOnline = false, isConnecting = false) }
     }
-    
+
     /**
      * 更新设置
      */
-    fun updateSettings(mqttBroker: String, deviceId: String) {
-        _settingsState.update { 
+    fun updateSettings(
+        mqttBroker: String,
+        deviceId: String,
+        username: String,
+        password: String
+    ) {
+        _settingsState.update {
             it.copy(
                 mqttBroker = mqttBroker,
-                deviceId = deviceId
+                deviceId = deviceId,
+                mqttUsername = username,
+                mqttPassword = password
             )
         }
         _uiState.update { it.copy(deviceId = deviceId) }
     }
-    
+
     /**
-     * 处理传感器数据
+     * 处理传感器数据（主要用于UI刷新）
+     * 异常推送由 alert 主题驱动，避免重复推送
      */
     private fun handleSensorData(data: SensorData) {
-        val deviceId = _settingsState.value.deviceId
-        // 检查告警条件
         val alerts = mutableListOf<AlertItem>()
-        
-        data.environment?.let { env ->
-            // 温度告警
-            if (env.temperature > 30 || env.temperature < 10) {
-                alerts.add(AlertItem(
-                    message = "温度异常: ${env.temperature}°C",
+        val deviceId = _settingsState.value.deviceId
+
+        appendEnvironmentAlerts(data, alerts)
+        appendBoxStateAlerts(data, deviceId, alerts)
+        latestEventAlert?.let { alerts.add(0, it) }
+
+        updateUiState(data, alerts.distinctBy { it.message })
+    }
+
+    /**
+     * 依据 sensors 里的 alerts/environment_limits 生成UI告警信息
+     */
+    private fun appendEnvironmentAlerts(data: SensorData, alerts: MutableList<AlertItem>) {
+        val env = data.environment ?: return
+        val limits = data.environmentLimits ?: buildFallbackLimits()
+
+        val temperatureAbnormal = data.alerts?.isTemperatureAbnormal()
+            ?: (env.temperature < limits.temperatureLow || env.temperature > limits.temperatureHigh)
+        val humidityAbnormal = data.alerts?.isHumidityAbnormal()
+            ?: (env.humidity < limits.humidityLow || env.humidity > limits.humidityHigh)
+
+        if (temperatureAbnormal) {
+            alerts.add(
+                AlertItem(
+                    message = "温度异常: ${String.format("%.1f", env.temperature)}°C（额定 ${String.format("%.1f", limits.temperatureRated)}°C）",
                     level = AlertLevel.WARNING
-                ))
-                // 发送温度异常通知（避免重复通知）
-                if (lastAlertStates["temperature"] != true) {
-                    notificationManager?.notifyTemperatureAlert(deviceId, env.temperature)
-                    lastAlertStates["temperature"] = true
-                }
-            } else {
-                lastAlertStates["temperature"] = false
-            }
-            
-            // 湿度告警
-            if (env.humidity > 70 || env.humidity < 30) {
-                alerts.add(AlertItem(
-                    message = "湿度异常: ${env.humidity}%",
-                    level = AlertLevel.WARNING
-                ))
-                // 发送湿度异常通知（避免重复通知）
-                if (lastAlertStates["humidity"] != true) {
-                    notificationManager?.notifyHumidityAlert(deviceId, env.humidity)
-                    lastAlertStates["humidity"] = true
-                }
-            } else {
-                lastAlertStates["humidity"] = false
-            }
+                )
+            )
         }
-        
-        // 检查药箱状态告警
+        if (humidityAbnormal) {
+            alerts.add(
+                AlertItem(
+                    message = "湿度异常: ${String.format("%.1f", env.humidity)}%（额定 ${String.format("%.1f", limits.humidityRated)}%）",
+                    level = AlertLevel.WARNING
+                )
+            )
+        }
+
+        lastAlertStates["temperature"] = temperatureAbnormal
+        lastAlertStates["humidity"] = humidityAbnormal
+    }
+
+    /**
+     * 依据药箱状态生成UI提示
+     */
+    private fun appendBoxStateAlerts(
+        data: SensorData,
+        deviceId: String,
+        alerts: MutableList<AlertItem>
+    ) {
         when (data.state) {
-            "tilted" -> {
-                alerts.add(AlertItem(
-                    message = "药箱处于倾斜状态",
-                    level = AlertLevel.ERROR
-                ))
-                // 发送倾斜通知（避免重复通知）
-                if (lastAlertStates["tilted"] != true) {
-                    notificationManager?.notifyTiltedAlert(deviceId)
-                    lastAlertStates["tilted"] = true
-                }
+            "tilted", "moving" -> {
+                alerts.add(
+                    AlertItem(
+                        message = "药箱处于倾斜或移动状态",
+                        level = AlertLevel.ERROR
+                    )
+                )
             }
             "opened" -> {
-                // 药箱打开通知（每次打开都通知）
-                notificationManager?.notifyBoxOpened(deviceId)
-                lastAlertStates["tilted"] = false
+                if (lastAlertStates["opened"] != true) {
+                    notificationManager?.notifyBoxOpened(deviceId)
+                    lastAlertStates["opened"] = true
+                }
             }
             else -> {
-                lastAlertStates["tilted"] = false
+                lastAlertStates["opened"] = false
             }
         }
-        
+    }
+
+    /**
+     * 处理设备主动告警事件（alert主题）
+     */
+    private fun handleAlertEvent(event: AlertEvent) {
+        val deviceId = _settingsState.value.deviceId
+
+        when (event.event) {
+            AlertEvent.EVENT_ENV_ABNORMAL -> {
+                val temperatureAbnormal = event.temperatureAbnormal == 1
+                val humidityAbnormal = event.humidityAbnormal == 1
+
+                val details = mutableListOf<String>()
+                if (temperatureAbnormal && event.temperature != null) {
+                    details.add("温度 ${String.format("%.1f", event.temperature)}°C")
+                }
+                if (humidityAbnormal && event.humidity != null) {
+                    details.add("湿度 ${String.format("%.1f", event.humidity)}%")
+                }
+                val message = if (details.isEmpty()) {
+                    "环境异常，请检查药箱"
+                } else {
+                    "环境异常: ${details.joinToString("，")}"
+                }
+
+                latestEventAlert = AlertItem(
+                    message = message,
+                    level = AlertLevel.ERROR
+                )
+                recordAlert("环境异常", message)
+
+                if (!alertPushSuppressed) {
+                    notificationManager?.notifyEnvironmentAbnormal(
+                        deviceId = deviceId,
+                        temperature = event.temperature,
+                        humidity = event.humidity,
+                        ratedTemperature = event.ratedTemperature,
+                        ratedHumidity = event.ratedHumidity,
+                        temperatureAbnormal = temperatureAbnormal,
+                        humidityAbnormal = humidityAbnormal
+                    )
+                }
+
+                lastAlertStates["temperature"] = temperatureAbnormal
+                lastAlertStates["humidity"] = humidityAbnormal
+            }
+
+            AlertEvent.EVENT_ENV_RECOVERED -> {
+                latestEventAlert = AlertItem(
+                    message = "环境已恢复正常",
+                    level = AlertLevel.INFO
+                )
+                notificationManager?.notifyEnvironmentRecovered(deviceId)
+                notificationManager?.clearTemperatureAlert()
+                notificationManager?.clearHumidityAlert()
+                recordAlert("环境恢复", "温湿度已恢复正常")
+                lastAlertStates["temperature"] = false
+                lastAlertStates["humidity"] = false
+            }
+
+            AlertEvent.EVENT_DROP_DETECTED -> {
+                // 新一轮跌落报警开始，重新允许推送
+                alertPushSuppressed = false
+
+                val message = "检测到药箱跌落（加速度>${event.thresholdG ?: 6.0}G）"
+                latestEventAlert = AlertItem(
+                    message = message,
+                    level = AlertLevel.ERROR
+                )
+                recordAlert("跌落告警", message)
+
+                if (!alertPushSuppressed) {
+                    notificationManager?.notifyDropDetected(
+                        deviceId = deviceId,
+                        acceleration = event.accelMagnitude,
+                        durationMs = event.durationMs
+                    )
+                }
+
+                lastAlertStates["drop"] = true
+            }
+
+            AlertEvent.EVENT_DROP_ALARM_CANCELLED -> {
+                val stopPush = event.stopPush == 1
+                if (stopPush) {
+                    alertPushSuppressed = true
+                }
+
+                latestEventAlert = AlertItem(
+                    message = if (stopPush) {
+                        "已按KEY2消警，APP异常推送已静默"
+                    } else {
+                        "跌落报警已取消"
+                    },
+                    level = AlertLevel.INFO
+                )
+
+                notificationManager?.clearTiltedAlert()
+                notificationManager?.notifyDropAlarmCancelled(deviceId, stopPush)
+                recordAlert("消警事件", "source=${event.source ?: "unknown"}, stop_push=${event.stopPush ?: 0}")
+                lastAlertStates["drop"] = false
+            }
+
+            else -> {
+                Timber.w("收到未知告警事件: ${event.event}")
+            }
+        }
+
+        // 告警事件到达时，主动更新一次UI告警区
+        _uiState.update { current ->
+            val merged = buildList {
+                latestEventAlert?.let { add(it) }
+                addAll(current.alerts)
+            }.distinctBy { it.message }
+            current.copy(alerts = merged)
+        }
+    }
+
+    /**
+     * 记录告警历史
+     */
+    private fun recordAlert(type: String, message: String) {
+        val record = AlertRecord(
+            type = type,
+            message = message,
+            timestamp = System.currentTimeMillis()
+        )
+        alertHistory.add(record)
+        Timber.d("记录告警: $type - $message")
+    }
+
+    /**
+     * 获取告警历史
+     */
+    fun getAlertHistory(): List<AlertRecord> = alertHistory.toList()
+
+    /**
+     * 更新UI状态
+     */
+    private fun updateUiState(data: SensorData, alerts: List<AlertItem>) {
         _uiState.update { currentState ->
             currentState.copy(
                 sensorData = data,
                 isOnline = true,
                 isConnecting = false,
                 lastUpdateTime = java.text.SimpleDateFormat(
-                    "HH:mm:ss", 
+                    "HH:mm:ss",
                     java.util.Locale.getDefault()
                 ).format(java.util.Date()),
                 alerts = alerts
             )
         }
-        
-        // 保存到历史数据库
-        viewModelScope.launch {
-            historyRepository.saveSensorData(deviceId, data)
-        }
     }
-    
+
     /**
      * 处理设备状态
      */
@@ -469,14 +585,14 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
                 isOnline = status.isOnline()
             )
         }
-        
+
         _settingsState.update { currentState ->
             currentState.copy(
                 isConnected = status.isOnline()
             )
         }
     }
-    
+
     /**
      * 处理命令响应
      */
@@ -490,6 +606,12 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
                 "set_interval" -> {
                     notificationManager?.notifyInfo("设置成功", "数据上报间隔已更新")
                 }
+                "set_env_rated" -> {
+                    notificationManager?.notifyInfo("设置成功", "温湿度额定值已更新")
+                }
+                "set_buzzer_enable" -> {
+                    notificationManager?.notifyInfo("设置成功", "蜂鸣器开关已更新")
+                }
             }
         } else {
             Timber.w("命令执行失败: ${response.cmd} - ${response.getFullErrorMessage()}")
@@ -499,7 +621,7 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
             )
         }
     }
-    
+
     /**
      * 发送立即上报命令
      */
@@ -508,7 +630,7 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
         mqttManager.publishCommand(deviceId, "publish_now")
         Timber.d("发送立即上报命令")
     }
-    
+
     /**
      * 发送重置设备命令
      */
@@ -517,7 +639,7 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
         mqttManager.publishCommand(deviceId, "reset")
         Timber.d("发送重置设备命令")
     }
-    
+
     /**
      * 发送设置上报间隔命令
      */
@@ -526,10 +648,84 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
         mqttManager.publishCommand(deviceId, "set_interval", interval)
         Timber.d("发送设置上报间隔命令: $interval")
     }
-    
+
+    /**
+     * 发送设置温湿度额定值命令
+     */
+    fun setEnvironmentRated(temperature: Double, humidity: Double) {
+        val deviceId = _settingsState.value.deviceId
+        val ok = mqttManager.publishCommand(
+            deviceId = deviceId,
+            cmd = "set_env_rated",
+            extraParams = mapOf(
+                "temperature" to temperature,
+                "humidity" to humidity
+            )
+        )
+        if (ok) {
+            notificationManager?.notifyInfo(
+                "命令已发送",
+                "已下发额定值: ${String.format("%.1f", temperature)}°C / ${String.format("%.1f", humidity)}%"
+            )
+        }
+        Timber.d("发送设置额定环境命令: temperature=$temperature, humidity=$humidity")
+    }
+
+    /**
+     * 设置蜂鸣器开关
+     */
+    fun setBuzzerEnabled(enabled: Boolean) {
+        val deviceId = _settingsState.value.deviceId
+        val ok = mqttManager.publishCommand(
+            deviceId = deviceId,
+            cmd = "set_buzzer_enable",
+            value = if (enabled) 1 else 0
+        )
+        if (ok) {
+            _uiState.update { it.copy(buzzerEnabled = enabled) }
+            notificationManager?.notifyInfo(
+                "命令已发送",
+                if (enabled) "已请求开启蜂鸣器" else "已请求关闭蜂鸣器"
+            )
+        }
+        Timber.d("发送蜂鸣器开关命令: $enabled")
+    }
+
+    private fun buildFallbackLimits(): EnvironmentLimitsData {
+        val tempLow = DEFAULT_RATED_TEMP * (1.0 - ENV_ABNORMAL_RATIO)
+        val tempHigh = DEFAULT_RATED_TEMP * (1.0 + ENV_ABNORMAL_RATIO)
+        val humidityLow = DEFAULT_RATED_HUMIDITY * (1.0 - ENV_ABNORMAL_RATIO)
+        val humidityHigh = DEFAULT_RATED_HUMIDITY * (1.0 + ENV_ABNORMAL_RATIO)
+        return EnvironmentLimitsData(
+            temperatureRated = DEFAULT_RATED_TEMP,
+            temperatureLow = tempLow,
+            temperatureHigh = tempHigh,
+            humidityRated = DEFAULT_RATED_HUMIDITY,
+            humidityLow = humidityLow,
+            humidityHigh = humidityHigh
+        )
+    }
+
     override fun onCleared() {
         super.onCleared()
-        offlineDetector.destroy()
         disconnect()
+    }
+}
+
+/**
+ * 告警记录数据类
+ * 用于存储历史告警信息
+ */
+data class AlertRecord(
+    val type: String,        // 告警类型（如"温度异常"、"药箱异常"）
+    val message: String,     // 告警详情
+    val timestamp: Long      // 告警时间戳
+) {
+    /**
+     * 获取格式化的时间字符串
+     */
+    fun getFormattedTime(): String {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(timestamp))
     }
 }

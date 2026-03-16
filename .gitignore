@@ -1,5 +1,8 @@
 # Gradle
 .gradle/
+.gradle-codex*/
+.gradle-user*/
+.gradle-dist-*/
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
@@ -10,6 +13,9 @@ local.properties
 
 # Android Studio
 .idea/
+.android-codex/
+.home-codex/
+.run/
 *.iml
 .navigation/
 captures/
@@ -34,6 +40,11 @@ google-services.json
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Local tooling
+.mvtest/
+*.apk
+app/signing.properties
 
 # Log files
 *.log

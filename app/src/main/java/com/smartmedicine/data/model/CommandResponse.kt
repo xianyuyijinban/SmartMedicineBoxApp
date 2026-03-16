@@ -35,6 +35,7 @@ data class CommandResponse(
         const val ERROR_DEVICE_OFFLINE = 404
         const val ERROR_TIMEOUT = 408
         const val ERROR_INTERNAL = 500
+        const val ERROR_SERVICE_UNAVAILABLE = 503
         
         /**
          * 从JSON字符串解析CommandResponse
@@ -91,6 +92,7 @@ data class CommandResponse(
             ERROR_DEVICE_OFFLINE -> "设备离线"
             ERROR_TIMEOUT -> "超时"
             ERROR_INTERNAL -> "内部错误"
+            ERROR_SERVICE_UNAVAILABLE -> "服务不可用"
             else -> "未知错误"
         }
     }
@@ -99,7 +101,6 @@ data class CommandResponse(
      * 获取格式化的时间戳
      */
     fun getFormattedTimestamp(): String {
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-        return sdf.format(java.util.Date(timestamp * 1000))
+        return DeviceTimestampFormatter.formatUptime(timestamp)
     }
 }

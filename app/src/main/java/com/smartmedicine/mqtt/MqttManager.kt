@@ -1,9 +1,11 @@
 package com.smartmedicine.mqtt
 
+import com.smartmedicine.data.model.AlertEvent
 import com.smartmedicine.data.model.CommandResponse
 import com.smartmedicine.data.model.DeviceStatus
 import com.smartmedicine.data.model.SensorData
 import kotlinx.coroutines.*
+import org.json.JSONObject
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import timber.log.Timber
@@ -33,6 +35,7 @@ class MqttManager {
         const val TOPIC_STATUS = "medicine/%s/status"
         const val TOPIC_CONTROL = "medicine/%s/control"
         const val TOPIC_CONTROL_RESPONSE = "medicine/%s/control/response"
+        const val TOPIC_ALERT = "medicine/%s/alert"
     }
 
     private var mqttClient: MqttClient? = null
@@ -41,6 +44,8 @@ class MqttManager {
     private var brokerUrl: String = ""
     private var clientId: String = ""
     private var currentDeviceId: String = ""
+    private var username: String = ""
+    private var password: String = ""
     
     // Coroutine scope for async operations
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -55,6 +60,7 @@ class MqttManager {
     private var onSensorDataCallback: ((SensorData) -> Unit)? = null
     private var onStatusCallback: ((DeviceStatus) -> Unit)? = null
     private var onCommandResponseCallback: ((CommandResponse) -> Unit)? = null
+    private var onAlertEventCallback: ((AlertEvent) -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
 
     /**
@@ -68,27 +74,34 @@ class MqttManager {
      * @param onSensorDataReceived 传感器数据接收回调
      * @param onStatusReceived 设备状态接收回调
      * @param onCommandResponseReceived 命令响应接收回调
+     * @param onAlertEventReceived 告警事件接收回调
      * @param onError 错误回调
      */
     fun connect(
         brokerUrl: String,
         clientId: String,
         deviceId: String,
+        username: String = "",
+        password: String = "",
         onConnected: () -> Unit = {},
         onDisconnected: () -> Unit = {},
         onSensorDataReceived: (SensorData) -> Unit = {},
         onStatusReceived: (DeviceStatus) -> Unit = {},
         onCommandResponseReceived: (CommandResponse) -> Unit = {},
+        onAlertEventReceived: (AlertEvent) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         if (mqttClient?.isConnected == true) {
             Timber.w("MQTT已连接，请先断开")
+            onError("MQTT已连接，请先断开后重连")
             return
         }
 
         this.brokerUrl = brokerUrl
         this.clientId = clientId
         this.currentDeviceId = deviceId
+        this.username = username
+        this.password = password
         this.isManualDisconnect = false
         
         // 保存回调
@@ -97,6 +110,7 @@ class MqttManager {
         this.onSensorDataCallback = onSensorDataReceived
         this.onStatusCallback = onStatusReceived
         this.onCommandResponseCallback = onCommandResponseReceived
+        this.onAlertEventCallback = onAlertEventReceived
         this.onErrorCallback = onError
 
         scope.launch {
@@ -111,6 +125,12 @@ class MqttManager {
                     keepAliveInterval = DEFAULT_KEEP_ALIVE
                     isCleanSession = DEFAULT_CLEAN_SESSION
                     isAutomaticReconnect = DEFAULT_AUTO_RECONNECT
+                    if (username.isNotBlank()) {
+                        userName = username
+                    }
+                    if (password.isNotBlank()) {
+                        this.password = password.toCharArray()
+                    }
                 }
 
                 mqttClient?.setCallback(object : MqttCallbackExtended {
@@ -156,7 +176,8 @@ class MqttManager {
             } catch (e: Exception) {
                 Timber.e(e, "MQTT连接失败")
                 scope.launch(Dispatchers.Main) {
-                    onErrorCallback?.invoke(e.message ?: "连接失败")
+                    val err = e.message ?: e.cause?.message ?: e.javaClass.simpleName
+                    onErrorCallback?.invoke(err)
                 }
                 startReconnect()
             }
@@ -182,6 +203,11 @@ class MqttManager {
             val responseTopic = TOPIC_CONTROL_RESPONSE.format(currentDeviceId)
             mqttClient?.subscribe(responseTopic, DEFAULT_QOS)
             Timber.d("订阅主题: $responseTopic")
+
+            // 订阅告警主题
+            val alertTopic = TOPIC_ALERT.format(currentDeviceId)
+            mqttClient?.subscribe(alertTopic, DEFAULT_QOS)
+            Timber.d("订阅主题: $alertTopic")
             
         } catch (e: MqttException) {
             Timber.e(e, "订阅主题失败")
@@ -218,6 +244,14 @@ class MqttManager {
                                 onCommandResponseCallback?.invoke(response)
                             }
                             Timber.d("命令响应: ${response.cmd} = ${response.result}")
+                        }
+                    }
+                    topic?.contains("/alert") == true -> {
+                        AlertEvent.fromJson(payload)?.let { alert ->
+                            scope.launch(Dispatchers.Main) {
+                                onAlertEventCallback?.invoke(alert)
+                            }
+                            Timber.d("收到告警事件: ${alert.event}")
                         }
                     }
                 }
@@ -291,15 +325,27 @@ class MqttManager {
      * @param deviceId 设备ID
      * @param cmd 命令名称
      * @param value 命令参数（可选）
+     * @param extraParams 扩展字段（可选）
      */
-    fun publishCommand(deviceId: String, cmd: String, value: Any? = null): Boolean {
+    fun publishCommand(
+        deviceId: String,
+        cmd: String,
+        value: Any? = null,
+        extraParams: Map<String, Any?> = emptyMap()
+    ): Boolean {
         val topic = TOPIC_CONTROL.format(deviceId)
-        val payload = if (value != null) {
-            """{"cmd": "$cmd", "value": $value}"""
-        } else {
-            """{"cmd": "$cmd"}"""
+        val payload = JSONObject().apply {
+            put("cmd", cmd)
+            if (value != null) {
+                put("value", value)
+            }
+            extraParams.forEach { (key, extraValue) ->
+                if (extraValue != null) {
+                    put(key, extraValue)
+                }
+            }
         }
-        return publish(topic, payload)
+        return publish(topic, payload.toString())
     }
 
     /**
@@ -330,11 +376,14 @@ class MqttManager {
                             brokerUrl = brokerUrl,
                             clientId = clientId,
                             deviceId = currentDeviceId,
+                            username = username,
+                            password = password,
                             onConnected = onConnectedCallback ?: {},
                             onDisconnected = onDisconnectedCallback ?: {},
                             onSensorDataReceived = onSensorDataCallback ?: {},
                             onStatusReceived = onStatusCallback ?: {},
                             onCommandResponseReceived = onCommandResponseCallback ?: {},
+                            onAlertEventReceived = onAlertEventCallback ?: {},
                             onError = onErrorCallback ?: {}
                         )
                     } catch (e: Exception) {

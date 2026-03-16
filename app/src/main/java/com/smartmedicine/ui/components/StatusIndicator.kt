@@ -93,36 +93,52 @@ fun ConnectionStatusIndicator(
  */
 @Composable
 fun BoxStatusCard(
+    isOnline: Boolean,
     state: String,
     vibration: Double?,
     pitch: Double?,
     roll: Double?,
     modifier: Modifier = Modifier
 ) {
-    val (stateText, stateColor, stateIcon) = when (state.lowercase()) {
-        "closed" -> Triple("已关闭", BoxStateClosed, "📦")
-        "opened" -> Triple("已打开", BoxStateOpened, "📂")
-        "moving" -> Triple("移动中", BoxStateMoving, "🚚")
-        "tilted" -> Triple("倾斜状态", BoxStateTilted, "⚠️")
-        else -> Triple("未知状态", StatusOffline, "❓")
+    val (stateText, stateColor, stateIcon) = if (!isOnline) {
+        Triple("尚未连接", MaterialTheme.colorScheme.onSurfaceVariant, "🔌")
+    } else {
+        when (state.lowercase()) {
+            "closed" -> Triple("已关闭", BoxStateClosed, "📦")
+            "opened" -> Triple("已打开", BoxStateOpened, "📂")
+            "moving" -> Triple("移动中", BoxStateMoving, "🚚")
+            "tilted" -> Triple("倾斜状态", BoxStateTilted, "⚠️")
+            else -> Triple("未知状态", StatusOffline, "❓")
+        }
     }
     
     // 判断是否倾斜（俯仰角或横滚角大于30度）
     val isTilted = (pitch != null && kotlin.math.abs(pitch) > 30) || 
                    (roll != null && kotlin.math.abs(roll) > 30)
-    val tiltStatus = if (isTilted) "倾斜" else "正常"
-    val tiltColor = if (isTilted) StatusWarning else StatusOnline
+    val tiltStatus = when {
+        !isOnline -> "尚未连接"
+        isTilted -> "倾斜"
+        else -> "正常"
+    }
+    val tiltColor = when {
+        !isOnline -> MaterialTheme.colorScheme.onSurfaceVariant
+        isTilted -> StatusWarning
+        else -> StatusOnline
+    }
     
     // 振动状态
-    val vibrationValue = vibration ?: 0.0
     val vibrationStatus = when {
-        vibrationValue > 0.5 -> "异常"
-        vibrationValue > 0.1 -> "轻微"
+        !isOnline -> "尚未连接"
+        vibration == null -> "--"
+        vibration > 0.5 -> "异常"
+        vibration > 0.1 -> "轻微"
         else -> "正常"
     }
     val vibrationColor = when {
-        vibrationValue > 0.5 -> StatusOffline
-        vibrationValue > 0.1 -> StatusWarning
+        !isOnline -> MaterialTheme.colorScheme.onSurfaceVariant
+        vibration == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        vibration > 0.5 -> StatusOffline
+        vibration > 0.1 -> StatusWarning
         else -> StatusOnline
     }
 
@@ -172,7 +188,7 @@ fun BoxStatusCard(
             )
             
             // 显示角度详情（如果倾斜）
-            if (isTilted && (pitch != null || roll != null)) {
+            if (isOnline && isTilted && (pitch != null || roll != null)) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),

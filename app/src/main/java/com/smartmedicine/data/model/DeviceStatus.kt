@@ -105,8 +105,7 @@ data class DeviceStatus(
      * 获取格式化的时间戳
      */
     fun getFormattedTimestamp(): String {
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-        return sdf.format(java.util.Date(timestamp * 1000))
+        return DeviceTimestampFormatter.formatUptime(timestamp)
     }
     
     /**

@@ -12,7 +12,13 @@ data class ControlCommand(
     val cmd: String = "",
     
     @SerializedName("value")
-    val value: Int? = null
+    val value: Int? = null,
+
+    @SerializedName("temperature")
+    val temperature: Double? = null,
+
+    @SerializedName("humidity")
+    val humidity: Double? = null
 ) {
     companion object {
         private val gson = Gson()
@@ -21,6 +27,8 @@ data class ControlCommand(
         const val CMD_RESET = "reset"
         const val CMD_PUBLISH_NOW = "publish_now"
         const val CMD_SET_INTERVAL = "set_interval"
+        const val CMD_SET_ENV_RATED = "set_env_rated"
+        const val CMD_SET_BUZZER_ENABLE = "set_buzzer_enable"
         const val CMD_GET_STATUS = "get_status"
         
         /**
@@ -44,6 +52,29 @@ data class ControlCommand(
         fun createSetIntervalCommand(interval: Int): ControlCommand {
             require(interval in 1..3600) { "Interval must be between 1 and 3600 seconds" }
             return ControlCommand(cmd = CMD_SET_INTERVAL, value = interval)
+        }
+
+        /**
+         * 创建设置温湿度额定值命令
+         */
+        fun createSetEnvRatedCommand(temperature: Double, humidity: Double): ControlCommand {
+            require(temperature in -40.0..85.0) { "Temperature must be between -40 and 85" }
+            require(humidity in 0.0..100.0) { "Humidity must be between 0 and 100" }
+            return ControlCommand(
+                cmd = CMD_SET_ENV_RATED,
+                temperature = temperature,
+                humidity = humidity
+            )
+        }
+
+        /**
+         * 创建蜂鸣器开关命令
+         */
+        fun createSetBuzzerEnableCommand(enabled: Boolean): ControlCommand {
+            return ControlCommand(
+                cmd = CMD_SET_BUZZER_ENABLE,
+                value = if (enabled) 1 else 0
+            )
         }
         
         /**
@@ -87,6 +118,12 @@ data class ControlCommand(
         return when (cmd) {
             CMD_RESET, CMD_PUBLISH_NOW, CMD_GET_STATUS -> true
             CMD_SET_INTERVAL -> value != null && value in 1..3600
+            CMD_SET_ENV_RATED -> {
+                temperature != null && humidity != null &&
+                    temperature in -40.0..85.0 &&
+                    humidity in 0.0..100.0
+            }
+            CMD_SET_BUZZER_ENABLE -> value == 0 || value == 1
             else -> false
         }
     }
@@ -99,6 +136,8 @@ data class ControlCommand(
             CMD_RESET -> "重置设备"
             CMD_PUBLISH_NOW -> "立即上报数据"
             CMD_SET_INTERVAL -> "设置上报间隔为 ${value}秒"
+            CMD_SET_ENV_RATED -> "设置额定环境为 ${temperature}°C / ${humidity}%"
+            CMD_SET_BUZZER_ENABLE -> if (value == 1) "开启蜂鸣器" else "关闭蜂鸣器"
             CMD_GET_STATUS -> "获取设备状态"
             else -> "未知命令"
         }

@@ -39,6 +39,13 @@ data class MotionData(
     companion object {
         private val gson = Gson()
         
+        // 阈值常量
+        const val STATIONARY_THRESHOLD = 0.01
+        const val GYRO_STATIONARY_THRESHOLD = 0.5
+        const val MOVING_THRESHOLD = 0.1
+        const val GYRO_MOVING_THRESHOLD = 2.0
+        const val TILT_THRESHOLD = 15.0  // 度
+        
         /**
          * 从JSON字符串解析MotionData
          */
@@ -99,14 +106,5 @@ data class MotionData(
      */
     fun getTiltAngle(): Double {
         return sqrt(pitch * pitch + roll * roll)
-    }
-    
-    // 阈值常量
-    companion object Thresholds {
-        const val STATIONARY_THRESHOLD = 0.01
-        const val GYRO_STATIONARY_THRESHOLD = 0.5
-        const val MOVING_THRESHOLD = 0.1
-        const val GYRO_MOVING_THRESHOLD = 2.0
-        const val TILT_THRESHOLD = 15.0  // 度
     }
 }

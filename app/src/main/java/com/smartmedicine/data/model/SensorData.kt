@@ -19,9 +19,15 @@ data class SensorData(
     
     @SerializedName("environment")
     val environment: EnvironmentData? = null,
+
+    @SerializedName("environment_limits")
+    val environmentLimits: EnvironmentLimitsData? = null,
     
     @SerializedName("motion")
     val motion: MotionData? = null,
+
+    @SerializedName("alerts")
+    val alerts: SensorAlertsData? = null,
     
     @SerializedName("valid")
     val valid: Int = 0
@@ -95,8 +101,7 @@ data class SensorData(
      * 获取格式化的时间戳
      */
     fun getFormattedTimestamp(): String {
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-        return sdf.format(java.util.Date(timestamp * 1000))
+        return DeviceTimestampFormatter.formatUptime(timestamp)
     }
     
     /**
@@ -111,6 +116,20 @@ data class SensorData(
      */
     fun getHumidity(): Double? {
         return environment?.humidity
+    }
+
+    /**
+     * 获取温度异常阈值范围（如设备有上报）
+     */
+    fun getTemperatureRange(): ClosedRange<Double>? {
+        return environmentLimits?.let { it.temperatureLow..it.temperatureHigh }
+    }
+
+    /**
+     * 获取湿度异常阈值范围（如设备有上报）
+     */
+    fun getHumidityRange(): ClosedRange<Double>? {
+        return environmentLimits?.let { it.humidityLow..it.humidityHigh }
     }
     
     /**

@@ -1,219 +1,183 @@
-# 智能药箱 Android APP 📱💊
+# 智能药箱 Android APP
 
-[![Kotlin](https://img.shields.io/badge/Kotlin-1.9.0-blue.svg)](https://kotlinlang.org)
-[![Android](https://img.shields.io/badge/Android-24+-green.svg)](https://developer.android.com)
-[![MQTT](https://img.shields.io/badge/MQTT-3.1.1-orange.svg)](https://mqtt.org)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## 1. 项目概述
 
-一款基于MQTT协议与智能硬件通信的Android应用，用于远程监控和控制智能药箱设备。
+这是智能药箱配套 Android APP，负责完成以下工作：
+- 连接 EMQX / 通用 MQTT Broker
+- 订阅药箱的实时数据、状态和告警事件
+- 下发控制命令（立即上报、上报间隔、额定值、蜂鸣器开关、复位）
+- 在通知栏推送环境异常、跌落、箱盖行为等事件
 
-<p align="center">
-  <img src="docs/screenshots/home_screen.png" width="280" alt="主界面">
-  <img src="docs/screenshots/history_screen.png" width="280" alt="历史数据">
-  <img src="docs/screenshots/settings_screen.png" width="280" alt="设置界面">
-</p>
+当前 UI 已按“家用药箱”方向调整：
+- 主色调为浅蓝 + 白色
+- 图标更新为蓝白药箱风格
+- 首页状态卡片、控制卡片、风险卡片统一改为更清晰的家用风格布局
 
-## ✨ 功能特性
+## 2. 当前已适配功能
 
-- 🔗 **MQTT协议通信** - 实时连接智能药箱设备
-- 📊 **传感器数据监控** - 温度、湿度、气压实时显示
-- 📱 **设备状态监测** - 在线状态、电量、WiFi信号
-- 🎮 **远程控制** - 开关盖、LED控制、上报间隔设置
-- 🔔 **智能告警推送** - 离线、温度/湿度异常、倾斜检测
-- 📈 **历史数据图表** - 24小时趋势图和统计分析
-- 🔄 **自动重连机制** - 网络波动自动恢复连接
-- 🌙 **深色主题支持** - Material Design 3 动态主题
+### 2.1 MQTT 连接与状态管理
+- 支持手动配置 Broker、设备 ID、用户名、密码。
+- 已移除阿里云 IoT 专用接入代码和文档，只保留 EMQX / 通用 MQTT 流程。
+- APP 内部区分：
+  - `MQTT 已连接`
+  - `设备已在线`
+- 仅 Broker 连接成功时不会误显示“设备正常”；在真正收到 `status` 或 `sensors` 数据前，首页显示 `尚未连接`。
+- APP 挂后台后 MQTT 不因 Activity 销毁主动断开，可由 Paho 自动重连维持连接。
 
-## 🏗️ 架构概览
+### 2.2 首页显示
+- 环境数据：温度、湿度、环境风险等级
+- 安全状态：箱盖状态、打开时长、跌落风险
+- 箱体状态：`closed/opened/moving/tilted`
+- 设备控制区：
+  - 第一行三个模块：`立即上报`、`上报间隔`、`额定值`
+  - 第二行：`蜂鸣器开关`
+  - 第三行：`重置设备`
+- 已彻底删除气压/海拔显示
 
+### 2.3 通知联动
+- `env_abnormal`：通知栏推送环境异常
+- `env_recovered`：提示恢复正常
+- `drop_detected`：立即推送跌落异常
+- `drop_alarm_cancelled(stop_push=1)`：停止继续推送该次跌落告警
+- `lid_abnormal_opened` / `lid_open_timeout` / `lid_closed`：同步箱盖行为事件
+
+### 2.4 刷新与异常处理
+- 左上角刷新按钮仅在 MQTT 已连接且当前不处于连接中/刷新中时可点击，未连接时不再触发白屏卡死。
+- 刷新中重复点击会被拒绝。
+- 收到控制应答或新一帧设备数据后，会自动结束刷新态。
+- 解析失败、连接失败、刷新超时都会给出明确提示。
+
+## 3. 当前默认联调参数
+
+默认值定义在 `app/src/main/java/com/smartmedicine/ui/MainActivity.kt`：
+
+```kotlin
+const val DEFAULT_MQTT_BROKER = "ssl://jaf12a6c.ala.cn-hangzhou.emqxsl.cn:8883"
+const val DEFAULT_DEVICE_ID = "box001"
+const val DEFAULT_MQTT_USERNAME = "yunmenglin"
+const val DEFAULT_MQTT_PASSWORD = "12345678y"
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                          UI Layer                           │
-│         Jetpack Compose + Material Design 3                 │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────┐
-│                     ViewModel Layer                         │
-│              StateFlow + Coroutines                         │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────┐
-│                   Repository Layer                          │
-│        HistoryRepository + NotificationManager              │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────┐
-│                     Data Layer                              │
-│    Room Database    │    MQTT (Paho)    │   Notification   │
-└─────────────────────────────────────────────────────────────┘
-```
 
-## 🚀 快速开始
+如果你的板端仍走本机 `mqtt_tls_proxy.py`，APP 侧仍然直接连 EMQX 即可；APP 和板端不要求使用同一个入口地址，但主题与设备 ID 要一致。
 
-### 环境要求
+## 4. 协议摘要
 
-- Android Studio Hedgehog (2023.1.1) 或更新版本
-- JDK 17+
-- Android SDK 24+ (Android 7.0)
-- Kotlin 1.9.0+
-
-### 安装步骤
-
-1. **克隆仓库**
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/SmartMedicineBoxApp.git
-   cd SmartMedicineBoxApp
-   ```
-
-2. **打开项目**
-   使用Android Studio打开项目目录
-
-3. **同步Gradle**
-   点击 "Sync Project with Gradle Files"
-
-4. **运行应用**
-   连接设备或启动模拟器，点击运行按钮
-
-### 配置MQTT Broker
-
-在应用设置界面中配置：
-- **MQTT Broker**: `tcp://192.168.1.100:1883`
-- **设备ID**: `medicine_box_001`
-
-## 📡 MQTT通信协议
-
-### 主题规范
-
-| 主题 | 类型 | 说明 |
-|------|------|------|
-| `medicine/{device_id}/sensors` | 订阅 | 传感器数据 |
-| `medicine/{device_id}/status` | 订阅 | 设备状态 |
-| `medicine/{device_id}/control` | 发布 | 控制命令 |
-| `medicine/{device_id}/control/response` | 订阅 | 命令响应 |
-
-### 数据格式
+APP 当前适配的核心字段如下：
 
 ```json
 {
-    "timestamp": 1234567890,
-    "device_id": "medicine_box_001",
-    "state": "closed",
-    "environment": {
-        "temperature": 25.30,
-        "humidity": 55.50,
-        "pressure": 101325.00,
-        "altitude": 0.00
-    },
-    "motion": {
-        "accel_x": 0.015,
-        "accel_y": -0.008,
-        "accel_z": 0.995,
-        "gyro_x": 0.50,
-        "gyro_y": -0.30,
-        "gyro_z": 0.10,
-        "pitch": 2.15,
-        "roll": -1.02,
-        "vibration": 0.005
-    },
-    "valid": 1
+  "timestamp": 123456789,
+  "device_id": "medicine_box_001",
+  "state": "closed",
+  "environment": {
+    "temperature": 25.30,
+    "humidity": 55.50
+  },
+  "environment_limits": {
+    "temperature_rated": 15.00,
+    "temperature_low": 10.50,
+    "temperature_high": 19.50,
+    "humidity_rated": 50.00,
+    "humidity_low": 35.00,
+    "humidity_high": 65.00
+  },
+  "motion": {
+    "accel_x": 0.015,
+    "accel_y": -0.008,
+    "accel_z": 0.995,
+    "gyro_x": 0.50,
+    "gyro_y": -0.30,
+    "gyro_z": 0.10,
+    "pitch": 2.15,
+    "roll": -1.02,
+    "vibration": 0.005
+  },
+  "behavior": {
+    "lid_state": "closed",
+    "open_duration_ms": 0,
+    "open_abnormal": 0,
+    "open_reason": "normal"
+  },
+  "risk": {
+    "env_level": "normal",
+    "drop_state": "none"
+  },
+  "alerts": {
+    "env_abnormal": 0,
+    "temperature_abnormal": 0,
+    "humidity_abnormal": 0
+  },
+  "valid": 1
 }
 ```
 
-## 🔔 告警条件
+说明：
+- APP 不再依赖 `pressure` / `altitude`。
+- `behavior` 用于箱盖状态和异常行为展示。
+- `risk` 用于环境风险与跌落风险展示。
 
-| 条件 | 级别 | 通知方式 |
-|------|------|----------|
-| 设备离线15秒+ | 🔴 Critical | 振动+声音 |
-| 温度 > 30°C 或 < 10°C | 🟠 Warning | 振动+声音 |
-| 湿度 > 70% 或 < 30% | 🟠 Warning | 振动+声音 |
-| 药箱倾斜 | 🟠 Warning | 振动+声音 |
-| 药箱打开 | 🟢 Info | 静默通知 |
+更完整的协议说明见固件仓库中的 `APP_INTERFACE.md`。
 
-## 📸 界面预览
+## 5. 主要代码位置
 
-### 主界面
-- 设备连接状态指示
-- 实时环境数据显示
-- 药箱状态监控
-- 快速控制按钮
-
-### 历史数据
-- 温度/湿度趋势图
-- 统计分析（最小/平均/最大）
-- 时间范围筛选（1小时~3天）
-
-### 设置界面
-- MQTT Broker配置
-- 设备ID设置
-- 连接状态管理
-
-## 🛠️ 技术栈
-
-- **UI**: Jetpack Compose 1.6.x, Material Design 3
-- **架构**: MVVM, StateFlow, Repository Pattern
-- **数据库**: Room 2.6.1
-- **网络**: Eclipse Paho MQTT Client
-- **异步**: Kotlin Coroutines, Flow
-- **日志**: Timber
-- **JSON**: Gson
-
-## 📁 项目结构
-
-```
+```text
 app/src/main/java/com/smartmedicine/
-├── mqtt/              # MQTT连接管理
-├── data/              # 数据模型和数据库
-│   ├── model/        # 数据类
-│   └── db/           # Room数据库
-├── repository/        # 数据仓库
-├── notification/      # 系统通知
-├── box/              # 业务逻辑
-│   ├── manager/      # 管理器
-│   └── service/      # 后台服务
-└── ui/               # UI层
-    ├── screens/      # 页面
-    ├── components/   # 组件
-    └── theme/        # 主题
+├── data/
+│   ├── db/                         # Room 数据库
+│   └── model/                      # SensorData / AlertEvent / BehaviorData / RiskData 等
+├── mqtt/
+│   └── MqttManager.kt              # MQTT 连接、订阅、发布、错误回调
+├── notification/
+│   └── NotificationManager.kt      # 通知栏推送
+└── ui/
+    ├── MainActivity.kt             # 页面导航 + ViewModel 主逻辑
+    ├── MainUiStateLogic.kt         # 刷新态/在线态逻辑
+    ├── components/                 # 首页组件与对话框
+    ├── screens/                    # Home / History / Settings
+    └── theme/                      # 浅蓝白主题与图标风格
 ```
 
-## 📝 开发文档
+## 6. 构建与安装
 
-详细开发文档请查看 [DEVELOPMENT.md](./DEVELOPMENT.md)
+### 6.1 单元测试
 
-包含内容：
-- 架构设计详解
-- API接口文档
-- 数据库设计
-- 代码规范
-- 构建指南
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+```
 
-## 🤝 贡献
+### 6.2 构建 Debug APK
 
-欢迎贡献代码！请遵循以下步骤：
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
 
-1. Fork 本项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'feat: Add some AmazingFeature'`)
-4. 推送分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+### 6.3 APK 输出位置
 
-## 📄 许可证
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
+本次同步后，该 APK 已重新构建通过。
 
-## 👨‍💻 开发者
+## 7. 已验证结果
 
-- **XiaoJunWei** - 硬件开发
-- **SmartMedicine Team** - APP开发
+本次修改后已验证：
+- `:app:testDebugUnitTest` 通过
+- `:app:assembleDebug` 通过
 
-## 🙏 致谢
+覆盖到的关键问题包括：
+- MQTT 连接失败不再静默无提示
+- 未连接设备时不再误显示“正常”
+- 刷新按钮不再导致白屏卡死
+- 控制卡片标题与模块文字恢复可见
+- pressure/altitude 已从 UI、模型和资源层清除
+- APP 后台保持连接，不因界面销毁主动断联
 
-- [Eclipse Paho](https://www.eclipse.org/paho/) - MQTT客户端
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) - UI框架
-- [Material Design](https://m3.material.io/) - 设计系统
+## 8. 测试建议
 
----
-
-<p align="center">
-  Made with ❤️ for Smart Healthcare
-</p>
+实际联调时，建议按以下顺序检查：
+1. 在设置页确认 Broker、设备 ID、用户名、密码正确。
+2. 先建立 MQTT 连接，再观察首页是否从 `尚未连接` 切到在线。
+3. 测试 `立即上报`，确认刷新状态能正确开始和结束。
+4. 修改额定值，观察设备是否回传 `control/response`。
+5. 人为触发环境异常、跌落、箱盖事件，确认首页与通知栏同步变化。
