@@ -6,9 +6,11 @@
   ******************************************************************************
   */
 #include "esp8266.h"
+#include "esp8266_at_probe_policy.h"
 #include "esp8266_command_rx_policy.h"
 #include "esp8266_delay_policy.h"
 #include "esp8266_mqtt_transport.h"
+#include "esp8266_raw_mqtt_policy.h"
 #include "esp8266_rx_policy.h"
 #include <string.h>
 #include <stdio.h>
@@ -31,7 +33,6 @@ static volatile uint16_t rx_read_idx = 0;
 /* 当前状态 */
 static ESP8266_State_t esp_state = ESP8266_STATE_RESET;
 static ESP8266_MQTT_MessageCallback_t mqtt_message_callback = NULL;
-static const uint32_t esp_probe_baud_list[] = {115200U, 9600U, 57600U, 74880U, 38400U};
 static ESP8266_MQTT_Config_t mqtt_cfg = {
     "broker.emqx.io",
     1883U,
@@ -54,6 +55,9 @@ static uint16_t mqtt_packet_id = 1U;
 static void ESP8266_CopyRxSnapshot(char *out, uint16_t out_size);
 static uint8_t ESP8266_ProbeMqttCommandSupport(void);
 static uint8_t ESP8266_WaitForToken(const char *token, uint32_t timeout_ms);
+static uint8_t ESP8266_ProbeAtCurrentBaud(uint32_t baud);
+static uint8_t ESP8266_ScanAtProbeBauds(uint32_t *out_baud);
+static void ESP8266_SetUartBaud(uint32_t baud);
 static uint8_t ESP8266_OpenRawSocket(const char *host, uint16_t port);
 static void ESP8266_CloseRawSocket(void);
 static uint8_t ESP8266_SendRawPacket(const uint8_t *packet, uint16_t packet_len);
@@ -70,6 +74,7 @@ static uint8_t ESP8266_BuildSubscribePacket(const char *topic,
                                             uint8_t *out,
                                             uint16_t out_size,
                                             uint16_t *out_len);
+static uint8_t ESP8266_WaitForRawConnAck(uint32_t timeout_ms);
 static void ESP8266_CopyRxSnapshotBytes(uint8_t *out, uint16_t out_size, uint16_t *out_len);
 static uint8_t ESP8266_BufferContainsToken(const uint8_t *buf, uint16_t len, const char *token);
 static uint8_t ESP8266_DecodeRemainingLength(const uint8_t *buf,
@@ -79,7 +84,6 @@ static uint8_t ESP8266_DecodeRemainingLength(const uint8_t *buf,
 static void ESP8266_DispatchRawMqttPublish(const uint8_t *packet, uint16_t packet_len);
 static uint8_t ESP8266_ProcessRawIpdData(const uint8_t *buf, uint16_t len);
 static uint8_t ESP8266_IsCloudPort(uint16_t port);
-static uint8_t ESP8266_SelectCloudAtConfig(uint16_t requested_port);
 static uint8_t ESP8266_TryCloudAtConnect(uint16_t requested_port);
 static void ESP8266_RefreshUartRxState(void);
 static HAL_StatusTypeDef ESP8266_PollRxByte(uint8_t *out);
@@ -199,23 +203,6 @@ static uint8_t ESP8266_ProbeMqttCommandSupport(void)
     mqtt_cmd_support = 0U;
     ESP8266_SetMqttDiag("NO_MQTT");
     return 0U;
-}
-
-static uint8_t ESP8266_SelectCloudAtConfig(uint16_t requested_port)
-{
-    ESP8266_MqttTransportCandidate_t candidate;
-    uint8_t attempt = 0U;
-
-    while (ESP8266_MQTT_GetCloudAtCandidate(requested_port, attempt, &candidate) == 0U) {
-        mqtt_cfg.broker_port = candidate.port;
-        if (ESP8266_ApplyMqttConfig(candidate.scheme, candidate.path) == 0U) {
-            return 0U;
-        }
-        attempt++;
-    }
-
-    ESP8266_SetMqttDiag("AT_CFG");
-    return 1U;
 }
 
 static uint8_t ESP8266_TryCloudAtConnect(uint16_t requested_port)
@@ -559,6 +546,48 @@ static uint8_t ESP8266_TryConnectCurrentBroker(void)
     return 1U;
 }
 
+static uint8_t ESP8266_ProbeAtCurrentBaud(uint32_t baud)
+{
+    uint8_t attempt;
+    uint8_t attempt_limit = ESP8266_AT_GetProbeAttemptsPerBaud();
+    uint32_t retry_delay_ms = ESP8266_AT_GetProbeRetryDelayMs();
+
+    ESP8266_SetUartBaud(baud);
+
+    for (attempt = 0U; attempt < attempt_limit; attempt++) {
+        if (ESP8266_SendATCommand("AT", "OK", ESP8266_AT_GetProbeTimeoutMs()) == 0U) {
+            return 0U;
+        }
+
+        if (((attempt + 1U) < attempt_limit) && (retry_delay_ms > 0U)) {
+            ESP8266_TaskFriendlyDelay(retry_delay_ms);
+        }
+    }
+
+    return 1U;
+}
+
+static uint8_t ESP8266_ScanAtProbeBauds(uint32_t *out_baud)
+{
+    uint8_t baud_idx = 0U;
+    uint32_t probe_baud = 0U;
+
+    if (out_baud == NULL) {
+        return 1U;
+    }
+
+    while (ESP8266_AT_GetProbeBaud(baud_idx, &probe_baud) == 0U) {
+        if (ESP8266_ProbeAtCurrentBaud(probe_baud) == 0U) {
+            *out_baud = probe_baud;
+            return 0U;
+        }
+
+        baud_idx++;
+    }
+
+    return 1U;
+}
+
 static void ESP8266_PushRxByte(uint8_t data)
 {
     rx_buffer[rx_write_idx] = data;
@@ -898,6 +927,43 @@ static uint8_t ESP8266_SendRawPacket(const uint8_t *packet, uint16_t packet_len)
     return 0U;
 }
 
+static uint8_t ESP8266_WaitForRawConnAck(uint32_t timeout_ms)
+{
+    uint8_t rx_snapshot[ESP8266_RX_BUF_SIZE];
+    uint16_t rx_len = 0U;
+    uint8_t reason = 0xFFU;
+    uint32_t start_tick = HAL_GetTick();
+
+    while ((HAL_GetTick() - start_tick) < timeout_ms) {
+        ESP8266_CopyRxSnapshotBytes(rx_snapshot, (uint16_t)sizeof(rx_snapshot), &rx_len);
+
+        switch (ESP8266_RawMqttClassifyConnAck(rx_snapshot, rx_len, &reason)) {
+            case ESP8266_RAW_MQTT_CONNACK_ACCEPTED:
+                return 0U;
+            case ESP8266_RAW_MQTT_CONNACK_REJECTED: {
+                char diag_buf[24];
+                (void)snprintf(diag_buf, sizeof(diag_buf), "RACK%u", (unsigned int)reason);
+                ESP8266_SetMqttDiag(diag_buf);
+                return 1U;
+            }
+            default:
+                break;
+        }
+
+        if ((ESP8266_BufferContainsToken(rx_snapshot, rx_len, "CLOSED") != 0U) ||
+            (ESP8266_BufferContainsToken(rx_snapshot, rx_len, "ERROR") != 0U) ||
+            (ESP8266_BufferContainsToken(rx_snapshot, rx_len, "FAIL") != 0U)) {
+            ESP8266_SetMqttDiag("RAW_CLS");
+            return 1U;
+        }
+
+        ESP8266_TaskFriendlyDelay(100U);
+    }
+
+    ESP8266_SetMqttDiag("RACK_TO");
+    return 1U;
+}
+
 static void ESP8266_RefreshUartRxState(void)
 {
     /* 清除可能由ESP启动日志(74880)引起的串口错误，避免后续AT接收中断停摆。 */
@@ -1224,51 +1290,30 @@ uint8_t ESP8266_WiFi_Init(void)
 {
     uint8_t at_ok = 0U;
     uint8_t attempt = 0U;
-    uint8_t baud_idx = 0U;
     uint32_t active_baud = 115200U;
     uint8_t baud_switched = 0U;
+    uint32_t boot_ready_delay_ms = ESP8266_AT_GetBootReadyDelayMs();
     char hostname_cmd[64];
 
-    /* 自动探测ESP当前波特率，覆盖被改成9600/57600等场景。 */
+    /* 自动探测ESP当前AT波特率，兼容被改到高波特率的ESP固件。 */
     ESP8266_SetMqttDiag("AT_SCAN");
-    for (baud_idx = 0U; baud_idx < (uint8_t)(sizeof(esp_probe_baud_list) / sizeof(esp_probe_baud_list[0])); baud_idx++) {
-        active_baud = esp_probe_baud_list[baud_idx];
-        ESP8266_SetUartBaud(active_baud);
-
-        for (attempt = 0U; attempt < 3U; attempt++) {
-            if (ESP8266_SendATCommand("AT", "OK", 1000) == 0U) {
-                at_ok = 1U;
-                break;
-            }
-            ESP8266_TaskFriendlyDelay(150);
-        }
-
-        if (at_ok != 0U) {
-            break;
-        }
+    if (boot_ready_delay_ms > 0U) {
+        ESP8266_TaskFriendlyDelay(boot_ready_delay_ms);
+    }
+    if (ESP8266_ScanAtProbeBauds(&active_baud) == 0U) {
+        at_ok = 1U;
     }
 
     if (at_ok == 0U) {
         /* 首轮失败后做一次硬复位再探测，兼容模块上电异常。 */
         ESP8266_SetMqttDiag("AT_RST");
         ESP8266_Reset();
-        ESP8266_TaskFriendlyDelay(300);
+        if (boot_ready_delay_ms > 0U) {
+            ESP8266_TaskFriendlyDelay(boot_ready_delay_ms);
+        }
 
-        for (baud_idx = 0U; baud_idx < (uint8_t)(sizeof(esp_probe_baud_list) / sizeof(esp_probe_baud_list[0])); baud_idx++) {
-            active_baud = esp_probe_baud_list[baud_idx];
-            ESP8266_SetUartBaud(active_baud);
-
-            for (attempt = 0U; attempt < 3U; attempt++) {
-                if (ESP8266_SendATCommand("AT", "OK", 1000) == 0U) {
-                    at_ok = 1U;
-                    break;
-                }
-                ESP8266_TaskFriendlyDelay(150);
-            }
-
-            if (at_ok != 0U) {
-                break;
-            }
+        if (ESP8266_ScanAtProbeBauds(&active_baud) == 0U) {
+            at_ok = 1U;
         }
     }
 
@@ -1430,13 +1475,15 @@ uint8_t ESP8266_MQTT_Init(const char *broker_ip, uint16_t port)
         mqtt_cfg.keepalive = 120U;
     }
 
-    if (ESP8266_IsCloudPort(mqtt_cfg.broker_port) != 0U) {
-        mqtt_raw_mode = 0U;
-        if (ESP8266_ProbeMqttCommandSupport() == 0U) {
-            ESP8266_SetMqttDiag("NO_MQTT");
+    if (ESP8266_MQTT_ShouldUseRawForCloud(mqtt_requested_port) != 0U) {
+        mqtt_raw_mode = 1U;
+        mqtt_cfg.broker_port = ESP8266_MQTT_GetCloudRawPort(mqtt_requested_port);
+        if (mqtt_cfg.broker_port == 0U) {
+            ESP8266_SetMqttDiag("PORT_ERR");
             return 1U;
         }
-        return ESP8266_SelectCloudAtConfig(mqtt_requested_port);
+        ESP8266_SetMqttDiag("RAW_INI");
+        return 0U;
     }
 
     /* 若固件不支持 MQTT AT 命令集，也走 raw 模式。 */
@@ -1539,16 +1586,6 @@ uint8_t ESP8266_MQTT_ConnectToBroker(const char *broker_ip, uint16_t port)
         mqtt_cfg.broker_port = port;
     }
 
-    if (ESP8266_IsCloudPort(mqtt_requested_port) != 0U) {
-        esp_state = ESP8266_STATE_MQTT_CONNECTING;
-        if (ESP8266_TryCloudAtConnect(mqtt_requested_port) == 0U) {
-            esp_state = ESP8266_STATE_MQTT_CONNECTED;
-            return 0U;
-        }
-        esp_state = ESP8266_STATE_WIFI_CONNECTED;
-        return 1U;
-    }
-
     if (mqtt_raw_mode != 0U) {
         esp_state = ESP8266_STATE_MQTT_CONNECTING;
 
@@ -1581,10 +1618,26 @@ uint8_t ESP8266_MQTT_ConnectToBroker(const char *broker_ip, uint16_t port)
             return 1U;
         }
 
-        ESP8266_ClearRxBuffer(); /* 丢弃CONNACK二进制，避免后续字符串匹配受0x00影响 */
+        if (ESP8266_WaitForRawConnAck(10000U) != 0U) {
+            ESP8266_CloseRawSocket();
+            esp_state = ESP8266_STATE_WIFI_CONNECTED;
+            return 1U;
+        }
+
+        ESP8266_ClearRxBuffer(); /* CONNECT完成后丢弃CONNACK，避免后续字符串匹配受0x00影响 */
         ESP8266_SetMqttDiag("RAW_OK");
         esp_state = ESP8266_STATE_MQTT_CONNECTED;
         return 0U;
+    }
+
+    if (ESP8266_IsCloudPort(mqtt_requested_port) != 0U) {
+        esp_state = ESP8266_STATE_MQTT_CONNECTING;
+        if (ESP8266_TryCloudAtConnect(mqtt_requested_port) == 0U) {
+            esp_state = ESP8266_STATE_MQTT_CONNECTED;
+            return 0U;
+        }
+        esp_state = ESP8266_STATE_WIFI_CONNECTED;
+        return 1U;
     }
 
     esp_state = ESP8266_STATE_MQTT_CONNECTING;

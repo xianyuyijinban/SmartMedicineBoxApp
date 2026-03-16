@@ -42,3 +42,17 @@ uint8_t ESP8266_MQTT_GetCloudAtCandidate(uint16_t requested_port,
 
     return 1U;
 }
+
+uint8_t ESP8266_MQTT_ShouldUseRawForCloud(uint16_t requested_port)
+{
+    return (uint8_t)((requested_port == 8883U) || (requested_port == 8084U));
+}
+
+uint16_t ESP8266_MQTT_GetCloudRawPort(uint16_t requested_port)
+{
+    if (ESP8266_MQTT_ShouldUseRawForCloud(requested_port) != 0U) {
+        return 8883U;
+    }
+
+    return 0U;
+}

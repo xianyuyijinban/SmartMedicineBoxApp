@@ -29,5 +29,13 @@ int main(void) {
     assert(ESP8266_MQTT_GetCloudAtCandidate(8883U, 2U, &candidate) != 0U);
     assert(ESP8266_MQTT_GetCloudAtCandidate(1883U, 0U, &candidate) != 0U);
 
+    assert(ESP8266_MQTT_ShouldUseRawForCloud(8883U) == 1U);
+    assert(ESP8266_MQTT_ShouldUseRawForCloud(8084U) == 1U);
+    assert(ESP8266_MQTT_ShouldUseRawForCloud(1883U) == 0U);
+
+    assert(ESP8266_MQTT_GetCloudRawPort(8883U) == 8883U);
+    assert(ESP8266_MQTT_GetCloudRawPort(8084U) == 8883U);
+    assert(ESP8266_MQTT_GetCloudRawPort(1883U) == 0U);
+
     return 0;
 }

@@ -31,6 +31,7 @@ static osSemaphoreId_t buzzerAlertSem;
 
 /* 运行标志 */
 static volatile uint8_t system_ready = 0;
+static volatile uint8_t app_wifi_connected = 0U;
 static volatile uint8_t env_alert_latched = 0U;
 static volatile uint8_t env_alert_pending = 0U;
 static volatile uint8_t env_recover_pending = 0U;
@@ -734,7 +735,6 @@ void SensorTask(void *argument)
   */
 void MQTTTask(void *argument)
 {
-    uint8_t wifi_connected = 0;
     uint8_t wifi_init_ready = 0U;
     uint8_t retry_count = 0;
     uint8_t max_retries = MQTT_CONNECT_RETRY_COUNT;
@@ -767,6 +767,7 @@ void MQTTTask(void *argument)
             case ESP8266_STATE_RESET:
             case ESP8266_STATE_INIT:
                 /* 初始化WiFi */
+                app_wifi_connected = 0U;
                 printf("[MQTT] Initializing WiFi...\r\n");
                 if (ESP8266_WiFi_Init() == 0) {
                     printf("[MQTT] WiFi AT OK\r\n");
@@ -857,7 +858,7 @@ void MQTTTask(void *argument)
             case ESP8266_STATE_ERROR:
                 printf("[MQTT] Error state, resetting...\r\n");
                 ESP8266_Reset();
-                wifi_connected = 0;
+                app_wifi_connected = 0U;
                 wifi_init_ready = 0U;
                 wifi_disconnect_suspect_count = 0U;
                 retry_count = 0;
@@ -869,13 +870,13 @@ void MQTTTask(void *argument)
         }
         
         /* WiFi连接管理 */
-        if (MQTTTask_ShouldStartWiFiConnect(wifi_connected,
+        if (MQTTTask_ShouldStartWiFiConnect(app_wifi_connected,
                                             wifi_init_ready,
                                             (uint8_t)ESP8266_GetState()) != 0U) {
             printf("[MQTT] Connecting to WiFi: %s\r\n", WIFI_SSID);
             if (ESP8266_WiFi_Connect(WIFI_SSID, WIFI_PASSWORD) == 0) {
                 printf("[MQTT] WiFi Connected\r\n");
-                wifi_connected = 1;
+                app_wifi_connected = 1U;
                 wifi_disconnect_suspect_count = 0U;
                 wifi_health_check_tick = HAL_GetTick();
                 retry_count = 0;
@@ -886,6 +887,7 @@ void MQTTTask(void *argument)
                 if (retry_count >= max_retries) {
                     printf("[MQTT] WiFi connection failed after %d retries, reset ESP8266...\r\n", max_retries);
                     ESP8266_Reset();
+                    app_wifi_connected = 0U;
                     wifi_init_ready = 0U;
                     retry_count = 0;
                 }
@@ -894,7 +896,7 @@ void MQTTTask(void *argument)
         }
         
         /* WiFi健康检查：降低频率并做连续失败确认，避免瞬时AT超时引发误判重连。 */
-        if (wifi_connected &&
+        if ((app_wifi_connected != 0U) &&
             ((uint32_t)(HAL_GetTick() - wifi_health_check_tick) >= WIFI_HEALTH_CHECK_INTERVAL_MS)) {
             ESP8266_State_t check_state = ESP8266_GetState();
             wifi_health_check_tick = HAL_GetTick();
@@ -906,7 +908,7 @@ void MQTTTask(void *argument)
                 wifi_disconnect_suspect_count++;
                 if (wifi_disconnect_suspect_count >= WIFI_DISCONNECT_CONFIRM_COUNT) {
                     printf("[MQTT] WiFi disconnected (confirmed)\r\n");
-                    wifi_connected = 0;
+                    app_wifi_connected = 0U;
                     retry_count = 0;
                     wifi_disconnect_suspect_count = 0U;
                 }
@@ -998,15 +1000,7 @@ void DisplayTask(void *argument)
                 DisplayUI_RenderPage1(&data, App_IsBuzzerFeatureEnabled(), key_stable_level, key2_raw);
             } else {
                 ESP8266_State_t state = ESP8266_GetState();
-                if (state == ESP8266_STATE_RESET) {
-                    sys_status.wifi_state = DISPLAY_WIFI_DISABLED;
-                } else if ((state == ESP8266_STATE_WIFI_CONNECTED) ||
-                           (state == ESP8266_STATE_MQTT_CONNECTING) ||
-                           (state == ESP8266_STATE_MQTT_CONNECTED)) {
-                    sys_status.wifi_state = DISPLAY_WIFI_CONNECTED;
-                } else {
-                    sys_status.wifi_state = DISPLAY_WIFI_DISCONNECTED;
-                }
+                sys_status.wifi_state = MQTTTask_GetDisplayWiFiState(app_wifi_connected);
                 sys_status.mqtt_ok = (state == ESP8266_STATE_MQTT_CONNECTED) ? 1U : 0U;
                 sys_status.uart1_init = (huart1.gState != HAL_UART_STATE_RESET) ? 1U : 0U;
                 sys_status.uart3_init = (huart3.gState != HAL_UART_STATE_RESET) ? 1U : 0U;
