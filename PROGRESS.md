@@ -44,3 +44,22 @@
 
 - Git commit ID
   - 相关修复提交：`161304f`
+
+## 2026-03-16 - SmartMedicineBoxApp Dirty Submodule Cleanup Lessons
+
+- 遇到了什么问题
+  - 根仓库长期显示 `SmartMedicineBoxApp` 子仓库为脏状态，导致很难判断当前到底是源码未提交，还是只是本地缓存、APK、签名配置等生成物残留。
+  - 子仓库里真实源码整理、文档删除、测试新增与本地 Gradle/Codex 目录、APK 产物混在一起，既影响判断，也影响后续合并分支时的可追踪性。
+
+- 如何解决的
+  - 先在 `SmartMedicineBoxApp` 内区分“应保留的源码改动”和“应忽略的本地生成物”，只为明显的本地目录与产物补充 `.gitignore` 规则，不误伤源码新文件。
+  - 使用仓库自带的 `gradlew.bat` 对当前应用状态执行 `:app:compileDebugKotlin`、`:app:testDebugUnitTest`、`:app:lintDebug` 验证，确认这批整理后的源码可编译、可测试、可通过 lint。
+  - 将子仓库有效改动单独提交，再回到根仓库提交 submodule 指针更新，恢复顶层仓库可审查、可合并的状态。
+
+- 以后如何避免
+  - Android 子仓库的源码改动和本地产物必须同步收口：新增本地工具目录时，第一时间补 `.gitignore`，不要等到根仓库被拖脏后再集中清理。
+  - 子仓库有一批完整源码改动时，先在子仓库内完成构建验证并提交，再让根仓库跟随更新 gitlink；不要长期把“未提交源码”和“临时产物”堆在同一个脏工作区里。
+  - 对带 submodule 的仓库，根仓库出现 `m <submodule>` 时，先进入子仓库做分类核查，再决定是提交、忽略还是删除，不能直接把所有脏项都当缓存处理。
+
+- Git commit ID
+  - 子仓库整理提交：`3ab363d`
