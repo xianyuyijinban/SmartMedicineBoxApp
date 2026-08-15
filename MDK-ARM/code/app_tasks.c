@@ -11,6 +11,8 @@
 #include "display_logic.h"
 #include "display_ui.h"
 #include "mqtt_task_policy.h"
+#include "medicine_timer_policy.h"
+#include "rtc.h"
 #include "tim.h"
 #include "usart.h"
 #include "spi.h"
@@ -29,6 +31,15 @@ osThreadId_t buzzerTaskHandle = NULL;
 static osSemaphoreId_t mqttPublishSem;
 static osSemaphoreId_t buzzerAlertSem;
 
+typedef struct {
+    uint8_t active;
+    uint8_t id;
+    uint8_t mode;
+    uint8_t target_hour;
+    uint8_t target_minute;
+    uint8_t target_second;
+} MedicineTimerSlot_t;
+
 /* 运行标志 */
 static volatile uint8_t system_ready = 0;
 static volatile uint8_t app_wifi_connected = 0U;
@@ -45,6 +56,16 @@ static volatile uint8_t drop_alert_latched = 0U;
 static volatile uint8_t drop_alert_pending = 0U;
 static volatile uint8_t drop_alarm_request_pending = 0U;
 static volatile uint8_t drop_alarm_cancel_pending = 0U;
+static volatile MedicineTimerSlot_t medicine_timer_slots[MEDICINE_TIMER_MAX_COUNT];
+static volatile uint8_t medicine_timer_scheduled_id = 0U;
+static volatile uint8_t medicine_timer_alarm_request_pending = 0U;
+static volatile uint8_t medicine_timer_alarm_publish_flags = 0U;
+static volatile uint8_t medicine_timer_cancel_publish_flags = 0U;
+static volatile uint8_t medicine_timer_alarm_active = 0U;
+static volatile uint8_t medicine_timer_current_alarm_id = 0U;
+static volatile uint8_t medicine_timer_reschedule_pending = 0U;
+static volatile uint32_t medicine_timer_alarm_timestamps[MEDICINE_TIMER_MAX_COUNT];
+static volatile uint32_t medicine_timer_cancel_timestamps[MEDICINE_TIMER_MAX_COUNT];
 static volatile uint32_t drop_alert_timestamp = 0U;
 static volatile uint32_t drop_alarm_cancel_timestamp = 0U;
 static volatile float drop_alert_accel_x = 0.0f;
@@ -52,6 +73,7 @@ static volatile float drop_alert_accel_y = 0.0f;
 static volatile float drop_alert_accel_z = 0.0f;
 static volatile float drop_alert_accel_magnitude = 0.0f;
 static volatile uint8_t control_response_pending = 0U;
+static volatile uint8_t mqtt_status_publish_pending = 0U;
 static char control_response_payload[224];
 extern volatile uint32_t g_uart3_last_rx_tick;
 
@@ -70,6 +92,12 @@ typedef struct {
 #define ENV_ALERT_REPEAT_MS    8000U
 #define BUZZER_TONE_HZ         1200U
 #define BUZZER_TONE_DUTY_PCT   90U
+#define MEDICINE_TIMER_MODE_COUNTDOWN 1U
+#define MEDICINE_TIMER_MODE_CLOCK     2U
+#define MEDICINE_TIMER_SHORT_BEEP_ON_MS       100U
+#define MEDICINE_TIMER_SHORT_BEEP_GAP_MS      300U
+#define MEDICINE_TIMER_SHORT_BEEP_COUNT       4U
+#define MEDICINE_TIMER_SHORT_ROUND_GAP_MS     1000U
 
 static void Buzzer_StopTone(void);
 
@@ -93,6 +121,26 @@ static void App_ToggleBuzzerFeature(void)
     if (buzzer_feature_enabled == 0U) {
         Buzzer_StopTone();
     }
+    mqtt_status_publish_pending = 1U;
+    if (mqttPublishSem != NULL) {
+        (void)osSemaphoreRelease(mqttPublishSem);
+    }
+}
+
+static void App_BuildStatusPayload(char *out, uint16_t out_size)
+{
+    if ((out == NULL) || (out_size == 0U)) {
+        return;
+    }
+
+    (void)snprintf(out,
+                   out_size,
+                   "{\"status\":\"online\",\"timestamp\":%lu,"
+                   "\"device_id\":\"box001\",\"firmware_version\":\"1.0.0\","
+                   "\"publish_interval\":%lu,\"buzzer_enabled\":%u}",
+                   HAL_GetTick(),
+                   (unsigned long)(mqtt_publish_interval_ms / 1000U),
+                   (unsigned int)App_IsBuzzerFeatureEnabled());
 }
 
 static uint8_t App_ExtractJsonString(const char *payload, const char *key, char *out, uint16_t out_size)
@@ -246,6 +294,191 @@ static uint8_t App_ExtractJsonInt(const char *payload, const char *key, int32_t 
     return 0U;
 }
 
+static uint8_t App_GetRtcHms(uint8_t *hour, uint8_t *minute, uint8_t *second)
+{
+    RTC_TimeTypeDef time = {0};
+    RTC_DateTypeDef date = {0};
+
+    if ((hour == NULL) || (minute == NULL) || (second == NULL)) {
+        return 1U;
+    }
+
+    if (HAL_RTC_GetTime(&hrtc, &time, RTC_FORMAT_BIN) != HAL_OK) {
+        return 1U;
+    }
+    if (HAL_RTC_GetDate(&hrtc, &date, RTC_FORMAT_BIN) != HAL_OK) {
+        return 1U;
+    }
+
+    *hour = time.Hours;
+    *minute = time.Minutes;
+    *second = time.Seconds;
+    return 0U;
+}
+
+static uint8_t App_SetRtcHms(uint8_t hour, uint8_t minute, uint8_t second)
+{
+    RTC_TimeTypeDef time = {0};
+    RTC_DateTypeDef date = {0};
+
+    if (MedicineTimer_IsValidHms(hour, minute, second) == 0U) {
+        return 1U;
+    }
+
+    time.Hours = hour;
+    time.Minutes = minute;
+    time.Seconds = second;
+    time.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+    time.StoreOperation = RTC_STOREOPERATION_RESET;
+
+    date.WeekDay = RTC_WEEKDAY_MONDAY;
+    date.Month = RTC_MONTH_JANUARY;
+    date.Date = 1U;
+    date.Year = 0U;
+
+    if (HAL_RTC_SetTime(&hrtc, &time, RTC_FORMAT_BIN) != HAL_OK) {
+        return 1U;
+    }
+    if (HAL_RTC_SetDate(&hrtc, &date, RTC_FORMAT_BIN) != HAL_OK) {
+        return 1U;
+    }
+    return 0U;
+}
+
+static const char *App_GetMedicineTimerModeString(uint8_t mode)
+{
+    return (mode == MEDICINE_TIMER_MODE_CLOCK) ? "clock" : "countdown";
+}
+
+static uint8_t App_GetMedicineTimerActiveCount(void)
+{
+    uint8_t index;
+    uint8_t count = 0U;
+
+    for (index = 0U; index < MEDICINE_TIMER_MAX_COUNT; index++) {
+        if (medicine_timer_slots[index].active != 0U) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static void App_ClearMedicineTimerSlot(uint8_t index)
+{
+    if (index < MEDICINE_TIMER_MAX_COUNT) {
+        medicine_timer_slots[index].active = 0U;
+    }
+}
+
+static void App_ClearMedicineTimer(void)
+{
+    uint8_t index;
+
+    (void)HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+    for (index = 0U; index < MEDICINE_TIMER_MAX_COUNT; index++) {
+        App_ClearMedicineTimerSlot(index);
+    }
+    medicine_timer_scheduled_id = 0U;
+    medicine_timer_alarm_request_pending = 0U;
+    medicine_timer_alarm_publish_flags = 0U;
+    medicine_timer_cancel_publish_flags = 0U;
+    medicine_timer_alarm_active = 0U;
+    medicine_timer_current_alarm_id = 0U;
+}
+
+static uint8_t App_SetRtcAlarmHms(uint8_t hour, uint8_t minute, uint8_t second)
+{
+    RTC_AlarmTypeDef alarm = {0};
+
+    if (MedicineTimer_IsValidHms(hour, minute, second) == 0U) {
+        return 1U;
+    }
+
+    (void)HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+
+    alarm.AlarmTime.Hours = hour;
+    alarm.AlarmTime.Minutes = minute;
+    alarm.AlarmTime.Seconds = second;
+    alarm.AlarmTime.SubSeconds = 0U;
+    alarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+    alarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
+    alarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY;
+    alarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
+    alarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
+    alarm.AlarmDateWeekDay = 1U;
+    alarm.Alarm = RTC_ALARM_A;
+
+    if (HAL_RTC_SetAlarm_IT(&hrtc, &alarm, RTC_FORMAT_BIN) != HAL_OK) {
+        return 1U;
+    }
+
+    return 0U;
+}
+
+static uint8_t App_RescheduleMedicineTimerAlarm(void)
+{
+    uint8_t now_hour = 0U;
+    uint8_t now_minute = 0U;
+    uint8_t now_second = 0U;
+    uint8_t index;
+    uint8_t best_index = MEDICINE_TIMER_MAX_COUNT;
+    uint32_t best_remaining = MEDICINE_TIMER_SECONDS_PER_DAY + 1UL;
+    uint32_t remaining;
+
+    (void)HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+    medicine_timer_scheduled_id = 0U;
+
+    if (App_GetRtcHms(&now_hour, &now_minute, &now_second) != 0U) {
+        return 1U;
+    }
+
+    for (index = 0U; index < MEDICINE_TIMER_MAX_COUNT; index++) {
+        if (medicine_timer_slots[index].active == 0U) {
+            continue;
+        }
+
+        remaining = MedicineTimer_ComputeClockRemaining(now_hour,
+                                                        now_minute,
+                                                        now_second,
+                                                        medicine_timer_slots[index].target_hour,
+                                                        medicine_timer_slots[index].target_minute,
+                                                        medicine_timer_slots[index].target_second);
+        if (remaining < best_remaining) {
+            best_remaining = remaining;
+            best_index = index;
+        }
+    }
+
+    if (best_index >= MEDICINE_TIMER_MAX_COUNT) {
+        return 0U;
+    }
+
+    if (App_SetRtcAlarmHms(medicine_timer_slots[best_index].target_hour,
+                           medicine_timer_slots[best_index].target_minute,
+                           medicine_timer_slots[best_index].target_second) != 0U) {
+        return 1U;
+    }
+
+    medicine_timer_scheduled_id = medicine_timer_slots[best_index].id;
+    return 0U;
+}
+
+static void App_SetMedicineTimerSlot(uint8_t index,
+                                     uint8_t mode,
+                                     uint8_t hour,
+                                     uint8_t minute,
+                                     uint8_t second)
+{
+    if (index < MEDICINE_TIMER_MAX_COUNT) {
+        medicine_timer_slots[index].active = 1U;
+        medicine_timer_slots[index].id = (uint8_t)(index + 1U);
+        medicine_timer_slots[index].mode = mode;
+        medicine_timer_slots[index].target_hour = hour;
+        medicine_timer_slots[index].target_minute = minute;
+        medicine_timer_slots[index].target_second = second;
+    }
+}
+
 static void App_QueueControlResponse(const char *payload)
 {
     size_t payload_len;
@@ -267,12 +500,30 @@ static void App_QueueControlResponse(const char *payload)
 static void App_OnMqttMessage(const char *topic, const char *payload)
 {
     char cmd[32];
-    char response[192];
+    char mode[16];
+    char response[256];
     int32_t value = 0;
+    int32_t hour = 0;
+    int32_t minute = 0;
+    int32_t second = 0;
+    int32_t now_hour = 0;
+    int32_t now_minute = 0;
+    int32_t now_second = 0;
+    int32_t timer_id = 0;
     float rated_temperature;
     float rated_humidity;
     float current_rated_temperature;
     float current_rated_humidity;
+    uint8_t rtc_hour = 0U;
+    uint8_t rtc_minute = 0U;
+    uint8_t rtc_second = 0U;
+    uint8_t target_hour = 0U;
+    uint8_t target_minute = 0U;
+    uint8_t target_second = 0U;
+    uint32_t remaining_seconds = 0UL;
+    uint8_t timer_id_present = 0U;
+    uint8_t slot_index = 0U;
+    uint8_t active_count = 0U;
     uint8_t has_cmd;
     uint8_t is_set_command;
 
@@ -327,10 +578,175 @@ static void App_OnMqttMessage(const char *topic, const char *payload)
         if (buzzer_feature_enabled == 0U) {
             Buzzer_StopTone();
         }
+        mqtt_status_publish_pending = 1U;
+        if (mqttPublishSem != NULL) {
+            (void)osSemaphoreRelease(mqttPublishSem);
+        }
 
         snprintf(response, sizeof(response),
                  "{\"cmd\":\"set_buzzer_enable\",\"result\":\"ok\",\"value\":%ld,\"timestamp\":%lu}",
                  (long)value, HAL_GetTick());
+        App_QueueControlResponse(response);
+        return;
+    }
+
+    if (has_cmd && (strcmp(cmd, "set_medicine_timer") == 0)) {
+        timer_id_present = (uint8_t)(App_ExtractJsonInt(payload, "timer_id", &timer_id) == 0U);
+        if ((timer_id_present != 0U) && (MedicineTimer_IsValidId(timer_id) == 0U)) {
+            snprintf(response, sizeof(response),
+                     "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"invalid timer_id\"}");
+            App_QueueControlResponse(response);
+            return;
+        }
+
+        if (timer_id_present != 0U) {
+            slot_index = (uint8_t)(timer_id - 1);
+        } else {
+            for (slot_index = 0U; slot_index < MEDICINE_TIMER_MAX_COUNT; slot_index++) {
+                if (medicine_timer_slots[slot_index].active == 0U) {
+                    break;
+                }
+            }
+            if (slot_index >= MEDICINE_TIMER_MAX_COUNT) {
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"timer full\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+        }
+
+        if ((App_ExtractJsonString(payload, "mode", mode, sizeof(mode)) != 0U) ||
+            (App_ExtractJsonInt(payload, "hour", &hour) != 0U) ||
+            (App_ExtractJsonInt(payload, "minute", &minute) != 0U) ||
+            (App_ExtractJsonInt(payload, "second", &second) != 0U) ||
+            (MedicineTimer_IsValidHms(hour, minute, second) == 0U)) {
+            snprintf(response, sizeof(response),
+                     "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"invalid timer\"}");
+            App_QueueControlResponse(response);
+            return;
+        }
+
+        if (strcmp(mode, "countdown") == 0) {
+            if (App_GetRtcHms(&rtc_hour, &rtc_minute, &rtc_second) != 0U) {
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"rtc unavailable\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+            if (MedicineTimer_ComputeCountdownTarget(rtc_hour, rtc_minute, rtc_second,
+                                                     (uint8_t)hour, (uint8_t)minute, (uint8_t)second,
+                                                     &target_hour, &target_minute, &target_second,
+                                                     &remaining_seconds) != 0U) {
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"countdown must be greater than zero\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+            App_SetMedicineTimerSlot(slot_index,
+                                     MEDICINE_TIMER_MODE_COUNTDOWN,
+                                     target_hour,
+                                     target_minute,
+                                     target_second);
+            if (App_RescheduleMedicineTimerAlarm() != 0U) {
+                App_ClearMedicineTimerSlot(slot_index);
+                (void)App_RescheduleMedicineTimerAlarm();
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"alarm set failed\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+        } else if (strcmp(mode, "clock") == 0) {
+            if ((App_ExtractJsonInt(payload, "now_hour", &now_hour) != 0U) ||
+                (App_ExtractJsonInt(payload, "now_minute", &now_minute) != 0U) ||
+                (App_ExtractJsonInt(payload, "now_second", &now_second) != 0U) ||
+                (MedicineTimer_IsValidHms(now_hour, now_minute, now_second) == 0U)) {
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"invalid rtc sync time\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+            if (App_SetRtcHms((uint8_t)now_hour, (uint8_t)now_minute, (uint8_t)now_second) != 0U) {
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"rtc sync failed\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+            remaining_seconds = MedicineTimer_ComputeClockRemaining((uint8_t)now_hour,
+                                                                    (uint8_t)now_minute,
+                                                                    (uint8_t)now_second,
+                                                                    (uint8_t)hour,
+                                                                    (uint8_t)minute,
+                                                                    (uint8_t)second);
+            target_hour = (uint8_t)hour;
+            target_minute = (uint8_t)minute;
+            target_second = (uint8_t)second;
+            App_SetMedicineTimerSlot(slot_index,
+                                     MEDICINE_TIMER_MODE_CLOCK,
+                                     target_hour,
+                                     target_minute,
+                                     target_second);
+            if (App_RescheduleMedicineTimerAlarm() != 0U) {
+                App_ClearMedicineTimerSlot(slot_index);
+                (void)App_RescheduleMedicineTimerAlarm();
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"alarm set failed\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+        } else {
+            snprintf(response, sizeof(response),
+                     "{\"cmd\":\"set_medicine_timer\",\"result\":\"error\",\"error_msg\":\"unsupported timer mode\"}");
+            App_QueueControlResponse(response);
+            return;
+        }
+
+        active_count = App_GetMedicineTimerActiveCount();
+        snprintf(response, sizeof(response),
+                 "{\"cmd\":\"set_medicine_timer\",\"result\":\"ok\",\"mode\":\"%s\","
+                 "\"timer_id\":%u,\"active_count\":%u,\"remaining_seconds\":%lu,"
+                 "\"target_hour\":%u,\"target_minute\":%u,"
+                 "\"target_second\":%u,\"timestamp\":%lu}",
+                 mode,
+                 (unsigned int)(slot_index + 1U),
+                 (unsigned int)active_count,
+                 (unsigned long)remaining_seconds,
+                 (unsigned int)target_hour,
+                 (unsigned int)target_minute,
+                 (unsigned int)target_second,
+                 HAL_GetTick());
+        App_QueueControlResponse(response);
+        return;
+    }
+
+    if (has_cmd && (strcmp(cmd, "cancel_medicine_timer") == 0)) {
+        timer_id_present = (uint8_t)(App_ExtractJsonInt(payload, "timer_id", &timer_id) == 0U);
+        if (timer_id_present != 0U) {
+            if (MedicineTimer_IsValidId(timer_id) == 0U) {
+                snprintf(response, sizeof(response),
+                         "{\"cmd\":\"cancel_medicine_timer\",\"result\":\"error\",\"error_msg\":\"invalid timer_id\"}");
+                App_QueueControlResponse(response);
+                return;
+            }
+            slot_index = (uint8_t)(timer_id - 1);
+            App_ClearMedicineTimerSlot(slot_index);
+            if (medicine_timer_current_alarm_id == (uint8_t)timer_id) {
+                medicine_timer_alarm_active = 0U;
+                medicine_timer_alarm_request_pending = 0U;
+                medicine_timer_current_alarm_id = 0U;
+            }
+            (void)App_RescheduleMedicineTimerAlarm();
+            snprintf(response, sizeof(response),
+                     "{\"cmd\":\"cancel_medicine_timer\",\"result\":\"ok\",\"timer_id\":%ld,"
+                     "\"active_count\":%u,\"timestamp\":%lu}",
+                     (long)timer_id,
+                     (unsigned int)App_GetMedicineTimerActiveCount(),
+                     HAL_GetTick());
+        } else {
+            App_ClearMedicineTimer();
+            snprintf(response, sizeof(response),
+                     "{\"cmd\":\"cancel_medicine_timer\",\"result\":\"ok\",\"active_count\":0,\"timestamp\":%lu}",
+                     HAL_GetTick());
+        }
         App_QueueControlResponse(response);
         return;
     }
@@ -372,6 +788,13 @@ static uint8_t App_PublishPendingAlerts(void)
     char payload[320];
     EnvironmentAlertStatus_t env_status;
     MedicineBoxData_t data;
+    uint8_t timer_index;
+    uint8_t timer_flag;
+
+    if (medicine_timer_reschedule_pending != 0U) {
+        (void)App_RescheduleMedicineTimerAlarm();
+        medicine_timer_reschedule_pending = 0U;
+    }
 
     if (ESP8266_GetState() != ESP8266_STATE_MQTT_CONNECTED) {
         return 1U;
@@ -450,6 +873,39 @@ static uint8_t App_PublishPendingAlerts(void)
 
         if (ESP8266_MQTT_Publish(MQTT_TOPIC_ALERT, payload, 0, 0) == 0U) {
             drop_alarm_cancel_pending = 0U;
+        }
+    }
+
+    for (timer_index = 0U; timer_index < MEDICINE_TIMER_MAX_COUNT; timer_index++) {
+        timer_flag = (uint8_t)(1U << timer_index);
+
+        if ((medicine_timer_alarm_publish_flags & timer_flag) != 0U) {
+            snprintf(payload, sizeof(payload),
+                     "{\"event\":\"medicine_timer_alarm\",\"timestamp\":%lu,"
+                     "\"timer_id\":%u,\"mode\":\"%s\",\"target_hour\":%u,"
+                     "\"target_minute\":%u,\"target_second\":%u}",
+                     medicine_timer_alarm_timestamps[timer_index],
+                     (unsigned int)(timer_index + 1U),
+                     App_GetMedicineTimerModeString(medicine_timer_slots[timer_index].mode),
+                     (unsigned int)medicine_timer_slots[timer_index].target_hour,
+                     (unsigned int)medicine_timer_slots[timer_index].target_minute,
+                     (unsigned int)medicine_timer_slots[timer_index].target_second);
+
+            if (ESP8266_MQTT_Publish(MQTT_TOPIC_ALERT, payload, 0, 0) == 0U) {
+                medicine_timer_alarm_publish_flags &= (uint8_t)~timer_flag;
+            }
+        }
+
+        if ((medicine_timer_cancel_publish_flags & timer_flag) != 0U) {
+            snprintf(payload, sizeof(payload),
+                     "{\"event\":\"medicine_timer_cancelled\",\"timestamp\":%lu,"
+                     "\"timer_id\":%u,\"source\":\"key2\",\"stop_push\":1}",
+                     medicine_timer_cancel_timestamps[timer_index],
+                     (unsigned int)(timer_index + 1U));
+
+            if (ESP8266_MQTT_Publish(MQTT_TOPIC_ALERT, payload, 0, 0) == 0U) {
+                medicine_timer_cancel_publish_flags &= (uint8_t)~timer_flag;
+            }
         }
     }
 
@@ -555,6 +1011,87 @@ static uint8_t Buzzer_WaitWithCancel(uint32_t wait_ms, KeyDebounceState_t *key_s
     return 0U;
 }
 
+static uint8_t Buzzer_WaitMedicineTimerDelay(uint32_t wait_ms, KeyDebounceState_t *key_state)
+{
+    uint32_t start_tick;
+    uint32_t elapsed;
+    uint32_t remaining;
+    uint32_t delay_ms;
+
+    if (key_state == NULL) {
+        return 0U;
+    }
+
+    start_tick = HAL_GetTick();
+    while (((uint32_t)(HAL_GetTick() - start_tick) < wait_ms) &&
+           (medicine_timer_alarm_active != 0U)) {
+        elapsed = (uint32_t)(HAL_GetTick() - start_tick);
+        remaining = (wait_ms > elapsed) ? (wait_ms - elapsed) : 0U;
+        delay_ms = (remaining > BUZZER_POLL_INTERVAL_MS) ? BUZZER_POLL_INTERVAL_MS : remaining;
+
+        if (App_IsBuzzerFeatureEnabled() == 0U) {
+            return 1U;
+        }
+        if (App_UpdateKey2Pressed(key_state) != 0U) {
+            return 1U;
+        }
+        if (delay_ms > 0U) {
+            osDelay(delay_ms);
+        }
+    }
+
+    return 0U;
+}
+
+void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc_arg)
+{
+    uint8_t scheduled_index;
+    uint8_t index;
+    uint8_t target_hour;
+    uint8_t target_minute;
+    uint8_t target_second;
+    uint32_t now_tick;
+
+    if ((hrtc_arg != NULL) && (hrtc_arg->Instance == RTC) && (medicine_timer_scheduled_id != 0U)) {
+        scheduled_index = (uint8_t)(medicine_timer_scheduled_id - 1U);
+        if ((scheduled_index >= MEDICINE_TIMER_MAX_COUNT) ||
+            (medicine_timer_slots[scheduled_index].active == 0U)) {
+            medicine_timer_reschedule_pending = 1U;
+            (void)osSemaphoreRelease(mqttPublishSem);
+            return;
+        }
+
+        target_hour = medicine_timer_slots[scheduled_index].target_hour;
+        target_minute = medicine_timer_slots[scheduled_index].target_minute;
+        target_second = medicine_timer_slots[scheduled_index].target_second;
+        now_tick = HAL_GetTick();
+
+        medicine_timer_current_alarm_id = medicine_timer_slots[scheduled_index].id;
+        for (index = 0U; index < MEDICINE_TIMER_MAX_COUNT; index++) {
+            if ((medicine_timer_slots[index].active != 0U) &&
+                (medicine_timer_slots[index].target_hour == target_hour) &&
+                (medicine_timer_slots[index].target_minute == target_minute) &&
+                (medicine_timer_slots[index].target_second == target_second)) {
+                medicine_timer_slots[index].active = 0U;
+                medicine_timer_alarm_timestamps[index] = now_tick;
+                medicine_timer_alarm_publish_flags |= (uint8_t)(1U << index);
+            }
+        }
+
+        medicine_timer_alarm_active = 1U;
+        medicine_timer_alarm_request_pending = 1U;
+        medicine_timer_scheduled_id = 0U;
+        medicine_timer_reschedule_pending = 1U;
+        (void)osSemaphoreRelease(mqttPublishSem);
+        if (App_IsBuzzerFeatureEnabled() != 0U) {
+            (void)osSemaphoreRelease(buzzerAlertSem);
+        } else {
+            medicine_timer_alarm_request_pending = 0U;
+            medicine_timer_alarm_active = 0U;
+        }
+    }
+}
+
 /**
   * @brief  应用初始化
   */
@@ -579,6 +1116,8 @@ void App_Init(void)
     buzzerAlertSem = osSemaphoreNew(1, 0, NULL);
     ESP8266_RegisterMQTTMessageCallback(App_OnMqttMessage);
     Buzzer_StopTone();
+    HAL_NVIC_SetPriority(RTC_Alarm_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(RTC_Alarm_IRQn);
     
     system_ready = 1;
     printf("[APP] System Ready\r\n");
@@ -740,6 +1279,7 @@ void MQTTTask(void *argument)
     uint8_t max_retries = MQTT_CONNECT_RETRY_COUNT;
     uint8_t wifi_disconnect_suspect_count = 0U;
     char json_buffer[JSON_BUFFER_SIZE];
+    char status_buffer[192];
     char runtime_client_id[64];
     uint32_t last_publish_tick = 0;
     uint32_t last_publish_log_tick = 0U;
@@ -799,7 +1339,8 @@ void MQTTTask(void *argument)
                         ESP8266_MQTT_Subscribe(MQTT_TOPIC_CONTROL, 0);
 
                         /* 发布上线消息 */
-                        ESP8266_MQTT_Publish(MQTT_TOPIC_STATUS, "online", 0, 1);
+                        App_BuildStatusPayload(status_buffer, sizeof(status_buffer));
+                        ESP8266_MQTT_Publish(MQTT_TOPIC_STATUS, status_buffer, 0, 1);
 
                         retry_count = 0;
                     } else {
@@ -823,6 +1364,13 @@ void MQTTTask(void *argument)
             case ESP8266_STATE_MQTT_CONNECTED:
                 ESP8266_ProcessRxData();
                 (void)App_PublishPendingAlerts();
+
+                if (mqtt_status_publish_pending != 0U) {
+                    App_BuildStatusPayload(status_buffer, sizeof(status_buffer));
+                    if (ESP8266_MQTT_Publish(MQTT_TOPIC_STATUS, status_buffer, 0, 1) == 0) {
+                        mqtt_status_publish_pending = 0U;
+                    }
+                }
 
                 if (osSemaphoreAcquire(mqttPublishSem, 100) == osOK) {
                     SensorManager_CreateJSON(json_buffer, sizeof(json_buffer));
@@ -1023,6 +1571,7 @@ void BuzzerTask(void *argument)
     uint8_t beep_index;
     uint8_t alarm_round;
     uint8_t cancelled;
+    uint8_t cancel_index;
     uint32_t off_delay_ms;
     KeyDebounceState_t key2_state = {0};
 
@@ -1034,6 +1583,9 @@ void BuzzerTask(void *argument)
     for (;;) {
         if (osSemaphoreAcquire(buzzerAlertSem, osWaitForever) == osOK) {
             if (App_IsBuzzerFeatureEnabled() == 0U) {
+                medicine_timer_alarm_request_pending = 0U;
+                medicine_timer_alarm_active = 0U;
+                medicine_timer_current_alarm_id = 0U;
                 Buzzer_StopTone();
                 continue;
             }
@@ -1066,6 +1618,53 @@ void BuzzerTask(void *argument)
                     (void)osSemaphoreRelease(mqttPublishSem);
                 }
                 drop_alert_latched = 0U;
+                continue;
+            }
+
+            if (medicine_timer_alarm_request_pending != 0U) {
+                medicine_timer_alarm_request_pending = 0U;
+                medicine_timer_alarm_active = 1U;
+                cancelled = 0U;
+
+                while (medicine_timer_alarm_active != 0U) {
+                    for (beep_index = 0U;
+                         (beep_index < MEDICINE_TIMER_SHORT_BEEP_COUNT) &&
+                         (medicine_timer_alarm_active != 0U);
+                         beep_index++) {
+                        Buzzer_StartTone();
+                        if (Buzzer_WaitMedicineTimerDelay(MEDICINE_TIMER_SHORT_BEEP_ON_MS, &key2_state) != 0U) {
+                            cancelled = 1U;
+                            break;
+                        }
+                        Buzzer_StopTone();
+                        if (Buzzer_WaitMedicineTimerDelay(MEDICINE_TIMER_SHORT_BEEP_GAP_MS, &key2_state) != 0U) {
+                            cancelled = 1U;
+                            break;
+                        }
+                    }
+
+                    Buzzer_StopTone();
+                    if ((cancelled != 0U) || (medicine_timer_alarm_active == 0U)) {
+                        break;
+                    }
+                    if (Buzzer_WaitMedicineTimerDelay(MEDICINE_TIMER_SHORT_ROUND_GAP_MS, &key2_state) != 0U) {
+                        cancelled = 1U;
+                        break;
+                    }
+                }
+                Buzzer_StopTone();
+
+                medicine_timer_alarm_active = 0U;
+                if (cancelled != 0U) {
+                    if ((medicine_timer_current_alarm_id >= 1U) &&
+                        (medicine_timer_current_alarm_id <= MEDICINE_TIMER_MAX_COUNT)) {
+                        cancel_index = (uint8_t)(medicine_timer_current_alarm_id - 1U);
+                        medicine_timer_cancel_timestamps[cancel_index] = HAL_GetTick();
+                        medicine_timer_cancel_publish_flags |= (uint8_t)(1U << cancel_index);
+                    }
+                    (void)osSemaphoreRelease(mqttPublishSem);
+                }
+                medicine_timer_current_alarm_id = 0U;
                 continue;
             }
 
