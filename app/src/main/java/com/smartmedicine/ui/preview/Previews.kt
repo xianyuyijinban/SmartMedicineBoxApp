@@ -1,4 +1,4 @@
-package com.smartmedicine.ui.preview
+﻿package com.smartmedicine.ui.preview
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
@@ -191,6 +191,9 @@ fun ControlButtonsSectionConnectedPreview() {
             onSetInterval = {},
             onSetEnvRated = { _, _ -> },
             onSetBuzzerEnabled = {},
+            onSetMedicineTimer = { _, _, _, _, _ -> },
+            onCancelMedicineTimer = { _ -> },
+            medicineCompartments = previewCompartments(),
             buzzerEnabled = true,
             isConnected = true
         )
@@ -207,6 +210,9 @@ fun ControlButtonsSectionDisconnectedPreview() {
             onSetInterval = {},
             onSetEnvRated = { _, _ -> },
             onSetBuzzerEnabled = {},
+            onSetMedicineTimer = { _, _, _, _, _ -> },
+            onCancelMedicineTimer = { _ -> },
+            medicineCompartments = previewCompartments(),
             buzzerEnabled = false,
             isConnected = false
         )
@@ -260,8 +266,15 @@ fun HomeScreenOnlinePreview() {
             onSetInterval = {},
             onSetEnvRated = { _, _ -> },
             onSetBuzzerEnabled = {},
-            onNavigateToSettings = {},
-            onNavigateToHistory = {}
+            onSetMedicineTimer = { _, _, _, _, _ -> },
+            onCancelMedicineTimer = { _ -> },
+            onDoseTaken = {},
+            onDoseSkipped = {},
+            onDoseSnoozed = {},
+            onNavigateToMedicineBoxes = {},
+            onNavigateToPlans = {},
+            onNavigateToSmartCenter = {},
+            onNavigateToSettings = {}
         )
     }
 }
@@ -290,8 +303,15 @@ fun HomeScreenOfflinePreview() {
             onSetInterval = {},
             onSetEnvRated = { _, _ -> },
             onSetBuzzerEnabled = {},
-            onNavigateToSettings = {},
-            onNavigateToHistory = {}
+            onSetMedicineTimer = { _, _, _, _, _ -> },
+            onCancelMedicineTimer = { _ -> },
+            onDoseTaken = {},
+            onDoseSkipped = {},
+            onDoseSnoozed = {},
+            onNavigateToMedicineBoxes = {},
+            onNavigateToPlans = {},
+            onNavigateToSmartCenter = {},
+            onNavigateToSettings = {}
         )
     }
 }
@@ -346,8 +366,15 @@ fun HomeScreenWithAlertsPreview() {
             onSetInterval = {},
             onSetEnvRated = { _, _ -> },
             onSetBuzzerEnabled = {},
-            onNavigateToSettings = {},
-            onNavigateToHistory = {}
+            onSetMedicineTimer = { _, _, _, _, _ -> },
+            onCancelMedicineTimer = { _ -> },
+            onDoseTaken = {},
+            onDoseSkipped = {},
+            onDoseSnoozed = {},
+            onNavigateToMedicineBoxes = {},
+            onNavigateToPlans = {},
+            onNavigateToSmartCenter = {},
+            onNavigateToSettings = {}
         )
     }
 }
@@ -413,3 +440,13 @@ fun SettingsScreenConnectingPreview() {
         )
     }
 }
+
+
+private fun previewCompartments(): List<MedicineCompartmentUiItem> =
+    (1..15).map { boxId ->
+        MedicineCompartmentUiItem(
+            boxId = boxId,
+            name = "Medicine $boxId",
+            sortOrder = boxId
+        )
+    }

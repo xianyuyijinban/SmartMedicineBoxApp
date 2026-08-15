@@ -44,6 +44,7 @@ class ModelBehaviorTest {
                 "temperature_abnormal": 1,
                 "humidity_abnormal": 0
               },
+              "buzzer_enabled": 0,
               "valid": 1
             }
         """.trimIndent()
@@ -56,6 +57,7 @@ class ModelBehaviorTest {
         assertTrue(data.isValid())
         assertEquals(25.6, data.environment!!.temperature, 0.0001)
         assertEquals(15.0, data.environmentLimits!!.temperatureRated, 0.0001)
+        assertEquals(0, data.buzzerEnabled)
         assertTrue(data.alerts!!.isTemperatureAbnormal())
         assertTrue(data.alerts!!.isEnvAbnormal())
     }
@@ -97,5 +99,23 @@ class ModelBehaviorTest {
         assertEquals(2, DeviceStatus(wifiRssi = -70).getWifiSignalLevel())
         assertEquals(1, DeviceStatus(wifiRssi = -80).getWifiSignalLevel())
         assertEquals(0, DeviceStatus(wifiRssi = -81).getWifiSignalLevel())
+    }
+
+    @Test
+    fun deviceStatusParsesBuzzerEnabled() {
+        val status = DeviceStatus.fromJson(
+            """
+            {
+              "status":"online",
+              "timestamp":123,
+              "device_id":"box001",
+              "publish_interval":5,
+              "buzzer_enabled":0
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(status)
+        assertEquals(0, status!!.buzzerEnabled)
     }
 }

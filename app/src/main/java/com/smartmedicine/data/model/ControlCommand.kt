@@ -18,7 +18,31 @@ data class ControlCommand(
     val temperature: Double? = null,
 
     @SerializedName("humidity")
-    val humidity: Double? = null
+    val humidity: Double? = null,
+
+    @SerializedName("timer_id")
+    val timerId: Int? = null,
+
+    @SerializedName("mode")
+    val mode: String? = null,
+
+    @SerializedName("hour")
+    val hour: Int? = null,
+
+    @SerializedName("minute")
+    val minute: Int? = null,
+
+    @SerializedName("second")
+    val second: Int? = null,
+
+    @SerializedName("now_hour")
+    val nowHour: Int? = null,
+
+    @SerializedName("now_minute")
+    val nowMinute: Int? = null,
+
+    @SerializedName("now_second")
+    val nowSecond: Int? = null
 ) {
     companion object {
         private val gson = Gson()
@@ -29,7 +53,11 @@ data class ControlCommand(
         const val CMD_SET_INTERVAL = "set_interval"
         const val CMD_SET_ENV_RATED = "set_env_rated"
         const val CMD_SET_BUZZER_ENABLE = "set_buzzer_enable"
+        const val CMD_SET_MEDICINE_TIMER = "set_medicine_timer"
+        const val CMD_CANCEL_MEDICINE_TIMER = "cancel_medicine_timer"
         const val CMD_GET_STATUS = "get_status"
+        const val TIMER_MODE_COUNTDOWN = "countdown"
+        const val TIMER_MODE_CLOCK = "clock"
         
         /**
          * 创建重置命令
@@ -75,6 +103,55 @@ data class ControlCommand(
                 cmd = CMD_SET_BUZZER_ENABLE,
                 value = if (enabled) 1 else 0
             )
+        }
+
+        fun createSetMedicineTimerCommand(
+            mode: String,
+            hour: Int,
+            minute: Int,
+            second: Int,
+            timerId: Int? = null,
+            nowHour: Int? = null,
+            nowMinute: Int? = null,
+            nowSecond: Int? = null
+        ): ControlCommand {
+            require(mode == TIMER_MODE_COUNTDOWN || mode == TIMER_MODE_CLOCK) {
+                "Unsupported timer mode"
+            }
+            require(hour in 0..23) { "Hour must be between 0 and 23" }
+            require(minute in 0..59) { "Minute must be between 0 and 59" }
+            require(second in 0..59) { "Second must be between 0 and 59" }
+            if (mode == TIMER_MODE_COUNTDOWN) {
+                require(hour != 0 || minute != 0 || second != 0) {
+                    "Countdown must be greater than zero"
+                }
+            }
+            if (mode == TIMER_MODE_CLOCK) {
+                require(nowHour in 0..23 && nowMinute in 0..59 && nowSecond in 0..59) {
+                    "Clock timer requires a valid current time"
+                }
+            }
+            if (timerId != null) {
+                require(timerId in 1..5) { "Timer id must be between 1 and 5" }
+            }
+            return ControlCommand(
+                cmd = CMD_SET_MEDICINE_TIMER,
+                timerId = timerId,
+                mode = mode,
+                hour = hour,
+                minute = minute,
+                second = second,
+                nowHour = nowHour,
+                nowMinute = nowMinute,
+                nowSecond = nowSecond
+            )
+        }
+
+        fun createCancelMedicineTimerCommand(timerId: Int? = null): ControlCommand {
+            if (timerId != null) {
+                require(timerId in 1..5) { "Timer id must be between 1 and 5" }
+            }
+            return ControlCommand(cmd = CMD_CANCEL_MEDICINE_TIMER, timerId = timerId)
         }
         
         /**
@@ -124,6 +201,24 @@ data class ControlCommand(
                     humidity in 0.0..100.0
             }
             CMD_SET_BUZZER_ENABLE -> value == 0 || value == 1
+            CMD_SET_MEDICINE_TIMER -> {
+                val h = hour
+                val m = minute
+                val s = second
+                val validTimerId = timerId == null || timerId in 1..5
+                val validHms = h != null && h in 0..23 &&
+                    m != null && m in 0..59 &&
+                    s != null && s in 0..59
+                when (mode) {
+                    TIMER_MODE_COUNTDOWN -> validTimerId && validHms && (h != 0 || m != 0 || s != 0)
+                    TIMER_MODE_CLOCK -> validTimerId && validHms &&
+                        nowHour != null && nowHour in 0..23 &&
+                        nowMinute != null && nowMinute in 0..59 &&
+                        nowSecond != null && nowSecond in 0..59
+                    else -> false
+                }
+            }
+            CMD_CANCEL_MEDICINE_TIMER -> timerId == null || timerId in 1..5
             else -> false
         }
     }

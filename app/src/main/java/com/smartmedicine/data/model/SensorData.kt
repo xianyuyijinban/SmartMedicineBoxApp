@@ -28,6 +28,9 @@ data class SensorData(
 
     @SerializedName("alerts")
     val alerts: SensorAlertsData? = null,
+
+    @SerializedName("buzzer_enabled")
+    val buzzerEnabled: Int? = null,
     
     @SerializedName("valid")
     val valid: Int = 0

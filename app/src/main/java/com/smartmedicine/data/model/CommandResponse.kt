@@ -21,7 +21,28 @@ data class CommandResponse(
     val errorCode: Int? = null,
     
     @SerializedName("error_msg")
-    val errorMsg: String? = null
+    val errorMsg: String? = null,
+
+    @SerializedName("timer_id")
+    val timerId: Int? = null,
+
+    @SerializedName("active_count")
+    val activeCount: Int? = null,
+
+    @SerializedName("mode")
+    val mode: String? = null,
+
+    @SerializedName("remaining_seconds")
+    val remainingSeconds: Long? = null,
+
+    @SerializedName("target_hour")
+    val targetHour: Int? = null,
+
+    @SerializedName("target_minute")
+    val targetMinute: Int? = null,
+
+    @SerializedName("target_second")
+    val targetSecond: Int? = null
 ) {
     companion object {
         private val gson = Gson()

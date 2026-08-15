@@ -53,7 +53,22 @@ data class AlertEvent(
     val source: String? = null,
 
     @SerializedName("stop_push")
-    val stopPush: Int? = null
+    val stopPush: Int? = null,
+
+    @SerializedName("timer_id")
+    val timerId: Int? = null,
+
+    @SerializedName("mode")
+    val mode: String? = null,
+
+    @SerializedName("target_hour")
+    val targetHour: Int? = null,
+
+    @SerializedName("target_minute")
+    val targetMinute: Int? = null,
+
+    @SerializedName("target_second")
+    val targetSecond: Int? = null
 ) {
     companion object {
         private val gson = Gson()
@@ -62,6 +77,8 @@ data class AlertEvent(
         const val EVENT_ENV_RECOVERED = "env_recovered"
         const val EVENT_DROP_DETECTED = "drop_detected"
         const val EVENT_DROP_ALARM_CANCELLED = "drop_alarm_cancelled"
+        const val EVENT_MEDICINE_TIMER_ALARM = "medicine_timer_alarm"
+        const val EVENT_MEDICINE_TIMER_CANCELLED = "medicine_timer_cancelled"
 
         fun fromJson(json: String): AlertEvent? {
             return try {

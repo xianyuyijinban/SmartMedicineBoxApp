@@ -24,7 +24,10 @@ data class DeviceStatus(
     val wifiRssi: Int = 0,
     
     @SerializedName("publish_interval")
-    val publishInterval: Int = 5
+    val publishInterval: Int = 5,
+
+    @SerializedName("buzzer_enabled")
+    val buzzerEnabled: Int? = null
 ) {
     companion object {
         private val gson = Gson()

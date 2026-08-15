@@ -32,6 +32,7 @@ class NotificationManager(private val context: Context) {
         private const val NOTIFICATION_ID_HUMIDITY = 1003
         private const val NOTIFICATION_ID_TILTED = 1004
         private const val NOTIFICATION_ID_OPENED = 1005
+        private const val NOTIFICATION_ID_MEDICINE_REMINDER_BASE = 3000
         
         // 单例实例
         @Volatile
@@ -413,6 +414,22 @@ class NotificationManager(private val context: Context) {
             .setAutoCancel(true)
 
         notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+    }
+
+    fun notifyMedicineDoseReminder(doseId: Long, medicineName: String, boxId: Int, doseAmount: Int) {
+        val message = "${boxId}号药盒 $medicineName，每次 $doseAmount"
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_ALERTS)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("该服药了")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("请及时服用：$message"))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setContentIntent(getMainActivityPendingIntent())
+            .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 300, 150, 300))
+
+        notificationManager.notify(NOTIFICATION_ID_MEDICINE_REMINDER_BASE + (doseId % 1000).toInt(), builder.build())
     }
 
     /**

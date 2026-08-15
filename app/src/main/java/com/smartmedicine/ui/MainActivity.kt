@@ -1,4 +1,4 @@
-package com.smartmedicine.ui
+﻿package com.smartmedicine.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -16,74 +16,73 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.smartmedicine.data.db.AppDatabase
+import com.smartmedicine.data.db.MedicineCompartmentEntity
+import com.smartmedicine.data.db.MedicineDoseEntity
+import com.smartmedicine.data.db.MedicinePlanEntity
 import com.smartmedicine.data.model.AlertEvent
 import com.smartmedicine.data.model.CommandResponse
 import com.smartmedicine.data.model.DeviceStatus
-import com.smartmedicine.data.model.EnvironmentLimitsData
 import com.smartmedicine.data.model.SensorData
+import com.smartmedicine.data.model.SmartAnalysisInput
+import com.smartmedicine.data.model.SmartCompartmentRecord
+import com.smartmedicine.data.model.SmartDoseRecord
+import com.smartmedicine.data.model.SmartMedicineAnalysis
 import com.smartmedicine.mqtt.MqttManager
 import com.smartmedicine.notification.NotificationManager
 import com.smartmedicine.ui.components.AlertLevel
 import com.smartmedicine.ui.screens.AlertItem
-import com.smartmedicine.ui.screens.HistoryScreen
 import com.smartmedicine.ui.screens.HomeScreen
 import com.smartmedicine.ui.screens.HomeUiState
+import com.smartmedicine.ui.screens.MedicineBoxScreen
+import com.smartmedicine.ui.screens.MedicineCompartmentUiItem
+import com.smartmedicine.ui.screens.MedicineDoseUiItem
+import com.smartmedicine.ui.screens.MedicinePlanScreen
+import com.smartmedicine.ui.screens.MedicinePlanUiItem
+import com.smartmedicine.ui.screens.MedicineTimerUiItem
 import com.smartmedicine.ui.screens.SettingsScreen
 import com.smartmedicine.ui.screens.SettingsUiState
+import com.smartmedicine.ui.screens.SmartCenterScreen
 import com.smartmedicine.ui.theme.SmartMedicineBoxTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
-/**
- * 主界面Activity - Jetpack Compose版本
- * 智能药箱监控APP主入口
- */
 class MainActivity : ComponentActivity() {
-
     private val viewModel: MainViewModel by viewModels()
     private lateinit var notificationManager: NotificationManager
 
-    // 默认配置
     companion object {
-        // 本地MQTT Broker配置
         const val DEFAULT_MQTT_BROKER = "ssl://jaf12a6c.ala.cn-hangzhou.emqxsl.cn:8883"
         const val DEFAULT_DEVICE_ID = "box001"
         const val DEFAULT_MQTT_USERNAME = "yunmenglin"
         const val DEFAULT_MQTT_PASSWORD = "12345678y"
     }
 
-    // 通知权限请求（Android 13+）
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
-            Timber.d("通知权限已授予")
-        } else {
-            Timber.w("通知权限被拒绝")
-        }
-    }
+    ) { granted -> Timber.d("Notification permission granted=$granted") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // 初始化Timber日志
-        if (Timber.treeCount == 0) {
-            Timber.plant(Timber.DebugTree())
-        }
-
-        // 初始化通知管理器
+        if (Timber.treeCount == 0) Timber.plant(Timber.DebugTree())
         notificationManager = NotificationManager.getInstance(this)
         viewModel.setNotificationManager(notificationManager)
-
-        // 请求通知权限（Android 13+）
         requestNotificationPermission()
-
         setContent {
             SmartMedicineBoxTheme {
                 Surface(
@@ -96,70 +95,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * 请求通知权限
-     */
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            when {
-                ContextCompat.checkSelfPermission(
-                    this, Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED -> {
-                    Timber.d("通知权限已存在")
-                }
-                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
-                    requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-                else -> {
-                    requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
     }
 }
 
-/**
- * 智能药箱应用导航
- */
 @Composable
 fun SmartMedicineBoxApp(viewModel: MainViewModel) {
     val navController = rememberNavController()
-
-    // 收集状态
     val uiState by viewModel.uiState.collectAsState()
     val settingsState by viewModel.settingsState.collectAsState()
 
-    NavHost(
-        navController = navController,
-        startDestination = "home"
-    ) {
-        // 主屏幕
+    NavHost(navController = navController, startDestination = "home") {
         composable("home") {
             HomeScreen(
                 uiState = uiState,
                 onRefresh = { viewModel.publishNow() },
                 onReset = { viewModel.resetDevice() },
-                onSetInterval = { interval -> viewModel.setInterval(interval) },
-                onSetEnvRated = { temperature, humidity ->
-                    viewModel.setEnvironmentRated(temperature, humidity)
+                onSetInterval = { viewModel.setInterval(it) },
+                onSetEnvRated = { temperature, humidity -> viewModel.setEnvironmentRated(temperature, humidity) },
+                onSetBuzzerEnabled = { viewModel.setBuzzerEnabled(it) },
+                onSetMedicineTimer = { boxId, mode, hour, minute, second ->
+                    viewModel.setMedicineTimer(boxId, mode, hour, minute, second)
                 },
-                onSetBuzzerEnabled = { enabled ->
-                    viewModel.setBuzzerEnabled(enabled)
-                },
-                onNavigateToSettings = {
-                    navController.navigate("settings")
-                },
-                onNavigateToHistory = {
-                    navController.navigate("history")
-                }
+                onCancelMedicineTimer = { viewModel.cancelMedicineTimer(it) },
+                onDoseTaken = { viewModel.markDoseTaken(it) },
+                onDoseSkipped = { viewModel.markDoseSkipped(it) },
+                onDoseSnoozed = { viewModel.snoozeDose(it) },
+                onNavigateToMedicineBoxes = { navController.navigate("medicine_boxes") },
+                onNavigateToPlans = { navController.navigate("medicine_plans") },
+                onNavigateToSmartCenter = { navController.navigate("smart_center") },
+                onNavigateToSettings = { navController.navigate("settings") }
             )
         }
-
-        // 设置屏幕
         composable("settings") {
             SettingsScreen(
                 settingsState = settingsState,
@@ -168,368 +140,441 @@ fun SmartMedicineBoxApp(viewModel: MainViewModel) {
                 },
                 onConnect = { viewModel.connect() },
                 onDisconnect = { viewModel.disconnect() },
-                onNavigateBack = {
-                    navController.popBackStack()
-                }
+                onNavigateBack = { navController.popBackStack() }
             )
         }
-
-        // 历史数据屏幕
-        composable("history") {
-            HistoryScreen(
-                onNavigateBack = {
-                    navController.popBackStack()
-                }
+        composable("medicine_boxes") {
+            MedicineBoxScreen(
+                compartments = uiState.medicineCompartments,
+                onSaveInfo = { boxId, name, stock, dose, low -> viewModel.saveCompartmentInfo(boxId, name, stock, dose, low) },
+                onAddInfo = { boxId, name, stock, dose, low -> viewModel.addCompartmentInfo(boxId, name, stock, dose, low) },
+                onDeactivate = { viewModel.deactivateCompartment(it) },
+                onTransfer = { from, to -> viewModel.transferCompartment(from, to) },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable("medicine_plans") {
+            MedicinePlanScreen(
+                plans = uiState.medicinePlans,
+                compartments = uiState.medicineCompartments.filter { it.active },
+                onAddPlan = { boxId, name, dose, hour, minute, repeat, days ->
+                    viewModel.addMedicinePlan(boxId, name, dose, hour, minute, repeat, days)
+                },
+                onUpdatePlan = { planId, boxId, name, dose, hour, minute, repeat, days ->
+                    viewModel.updateMedicinePlan(planId, boxId, name, dose, hour, minute, repeat, days)
+                },
+                onSetPlanEnabled = { planId, enabled -> viewModel.setPlanEnabled(planId, enabled) },
+                onDeletePlan = { viewModel.deleteMedicinePlan(it) },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable("smart_center") {
+            SmartCenterScreen(
+                analysis = uiState.smartAnalysis,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
     }
 }
 
-/**
- * 主ViewModel
- * 管理UI状态和业务逻辑
- */
-class MainViewModel(application: android.app.Application) : androidx.lifecycle.AndroidViewModel(application) {
-
+class MainViewModel(application: android.app.Application) : AndroidViewModel(application) {
     private val mqttManager = MqttManager()
-
-    // 通知管理器（由Activity注入）
+    private val medicineCompartmentDao = AppDatabase.getInstance(application).medicineCompartmentDao()
+    private val medicinePlanDao = AppDatabase.getInstance(application).medicinePlanDao()
+    private val medicineDoseDao = AppDatabase.getInstance(application).medicineDoseDao()
     private var notificationManager: NotificationManager? = null
+    private var pendingMedicineTimerDraft: MedicineTimerDraft? = null
+    private val pendingTimerDrafts = mutableMapOf<Int, MedicineTimerDraft>()
+    private var lastSyncedPlanTimerIds: Set<Int> = emptySet()
+    private val notifiedDoseIds = mutableSetOf<Long>()
+    private var latestEventAlert: AlertItem? = null
+    private val alertHistory = mutableListOf<AlertRecord>()
+    private var latestDoses: List<MedicineDoseEntity> = emptyList()
+    private var latestCompartments: List<MedicineCompartmentEntity> = emptyList()
 
-    // UI状态
-    private val _uiState = MutableStateFlow(HomeUiState())
+    private val _uiState = MutableStateFlow(HomeUiState(deviceId = MainActivity.DEFAULT_DEVICE_ID))
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // 设置状态
-    private val _settingsState = MutableStateFlow(SettingsUiState())
-    val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
-
-    // 上次告警状态（用于UI去抖）
-    private val lastAlertStates = mutableMapOf<String, Boolean>()
-
-    // 告警历史记录
-    private val alertHistory = mutableListOf<AlertRecord>()
-
-    // 最新的设备事件告警（由 alert 主题上报）
-    private var latestEventAlert: AlertItem? = null
-
-    // 由设备 drop_alarm_cancelled(stop_push=1) 控制的 APP 推送静默开关
-    private var alertPushSuppressed = false
-
-    companion object {
-        private const val DEFAULT_RATED_TEMP = 15.0
-        private const val DEFAULT_RATED_HUMIDITY = 50.0
-        private const val ENV_ABNORMAL_RATIO = 0.30
-    }
-
-    init {
-        // 初始化状态
-        _uiState.value = HomeUiState(
-            deviceId = MainActivity.DEFAULT_DEVICE_ID
-        )
-        _settingsState.value = SettingsUiState(
+    private val _settingsState = MutableStateFlow(
+        SettingsUiState(
             mqttBroker = MainActivity.DEFAULT_MQTT_BROKER,
             deviceId = MainActivity.DEFAULT_DEVICE_ID,
             mqttUsername = MainActivity.DEFAULT_MQTT_USERNAME,
             mqttPassword = MainActivity.DEFAULT_MQTT_PASSWORD
         )
+    )
+    val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
+
+    companion object {
+        private const val MAX_MEDICINE_TIMERS = 5
+        private const val MEDICINE_COMPARTMENT_COUNT = 15
+        private const val SNOOZE_DELAY_MS = 5L * 60L * 1000L
+        private const val OVERDUE_DELAY_MS = 30L * 60L * 1000L
     }
 
-    /**
-     * 设置通知管理器（由Activity注入）
-     */
+    init {
+        observeMedicineCompartments()
+        observeMedicinePlans()
+        observeMedicineDoses()
+        startMedicineTimerTicker()
+        startDoseMaintenanceTicker()
+    }
+
     fun setNotificationManager(manager: NotificationManager) {
-        this.notificationManager = manager
+        notificationManager = manager
     }
 
-    /**
-     * 连接到MQTT Broker
-     */
-    fun connect() {
-        val settings = _settingsState.value
-
-        _settingsState.update { it.copy(isConnecting = true, errorMessage = null) }
-        _uiState.update { it.copy(isConnecting = true) }
-
-        try {
-            val clientId = "AndroidApp_${System.currentTimeMillis()}"
-
-            mqttManager.connect(
-                brokerUrl = settings.mqttBroker,
-                clientId = clientId,
-                deviceId = settings.deviceId,
-                username = settings.mqttUsername,
-                password = settings.mqttPassword,
-                onConnected = {
-                    _settingsState.update { it.copy(isConnected = true, isConnecting = false) }
-                    _uiState.update {
-                        it.copy(
-                            isOnline = true,
-                            isConnecting = false,
-                            deviceId = settings.deviceId
-                        )
-                    }
-                    Timber.d("MQTT连接成功")
-                },
-                onDisconnected = {
-                    _settingsState.update { it.copy(isConnected = false, isConnecting = false) }
-                    _uiState.update {
-                        it.copy(
-                            isOnline = false,
-                            isConnecting = false
-                        )
-                    }
-                    Timber.d("MQTT连接断开")
-                },
-                onSensorDataReceived = { data ->
-                    handleSensorData(data)
-                },
-                onStatusReceived = { status ->
-                    handleDeviceStatus(status)
-                },
-                onCommandResponseReceived = { response ->
-                    handleCommandResponse(response)
-                },
-                onAlertEventReceived = { event ->
-                    handleAlertEvent(event)
-                },
-                onError = { error ->
-                    _settingsState.update {
-                        it.copy(
-                            isConnecting = false,
-                            errorMessage = error
-                        )
-                    }
-                    _uiState.update { it.copy(isConnecting = false) }
-                    Timber.e("MQTT错误: $error")
+    private fun observeMedicineCompartments() {
+        viewModelScope.launch {
+            ensureDefaultMedicineCompartments()
+            medicineCompartmentDao.observeAll().collectLatest { compartments ->
+                latestCompartments = compartments
+                _uiState.update { current ->
+                    current.copy(medicineCompartments = compartments.map { it.toUiItem() })
                 }
-            )
-        } catch (e: Exception) {
-            _settingsState.update {
-                it.copy(
-                    isConnecting = false,
-                    errorMessage = e.message
-                )
+                refreshSmartAnalysis()
             }
-            _uiState.update { it.copy(isConnecting = false) }
-            Timber.e(e, "连接失败")
         }
     }
 
-    /**
-     * 断开连接
-     */
+    private suspend fun ensureDefaultMedicineCompartments() {
+        if (medicineCompartmentDao.getAll().isNotEmpty()) return
+        val now = System.currentTimeMillis()
+        medicineCompartmentDao.insertAll(
+            (1..MEDICINE_COMPARTMENT_COUNT).map { boxId ->
+                MedicineCompartmentEntity(boxId = boxId, name = "$boxId 号药盒", sortOrder = boxId, updatedAt = now)
+            }
+        )
+    }
+
+    private fun observeMedicinePlans() {
+        viewModelScope.launch {
+            medicinePlanDao.observeAll().collectLatest { plans ->
+                _uiState.update { current ->
+                    current.copy(
+                        medicinePlans = plans.map { it.toUiItem() },
+                        activePlanCount = plans.count { it.enabled }
+                    )
+                }
+                refreshSmartAnalysis()
+            }
+        }
+    }
+
+    private fun observeMedicineDoses() {
+        viewModelScope.launch {
+            medicineDoseDao.observeAll().collectLatest { doses ->
+                latestDoses = doses
+                val todayStart = startOfTodayMillis()
+                val tomorrowStart = todayStart + 24L * 60L * 60L * 1000L
+                val hiddenReasons = setOf("重复稍后提醒已合并", "服药计划已关闭", "服药计划已修改", "服药计划已删除", "药盒已停用")
+                val today = doses.filter {
+                    it.scheduledAt in todayStart until tomorrowStart &&
+                        it.smartReason !in hiddenReasons
+                }
+                    .sortedBy { it.scheduledAt }
+                _uiState.update { current ->
+                    current.copy(
+                        todayDoses = today.map { it.toUiItem() },
+                        todayTotalCount = today.size,
+                        todayTakenCount = today.count { it.status == MedicineDoseEntity.STATUS_TAKEN },
+                        missedCount = doses.count { it.status == MedicineDoseEntity.STATUS_MISSED }
+                    )
+                }
+                refreshSmartAnalysis()
+            }
+        }
+    }
+
+    private fun refreshSmartAnalysis() {
+        val current = _uiState.value
+        val sevenDaysAgo = System.currentTimeMillis() - 7L * 24L * 60L * 60L * 1000L
+        val analysis = SmartMedicineAnalysis.analyze(
+            SmartAnalysisInput(
+                now = System.currentTimeMillis(),
+                doses = latestDoses.filter { it.scheduledAt >= sevenDaysAgo }.map {
+                    SmartDoseRecord(
+                        scheduledAt = it.scheduledAt,
+                        status = it.status,
+                        actualTakenAt = it.actualTakenAt,
+                        reminderCount = it.reminderCount
+                    )
+                },
+                compartments = latestCompartments.filter { it.active }.map {
+                    SmartCompartmentRecord(
+                        boxId = it.boxId,
+                        name = it.name,
+                        stock = it.stock,
+                        dosePerUse = it.dosePerUse,
+                        lowStockThreshold = it.lowStockThreshold,
+                        active = it.active
+                    )
+                },
+                activePlanCount = current.activePlanCount,
+                isOnline = current.isOnline,
+                boxState = current.sensorData?.state,
+                environmentAbnormal = current.alerts.any { it.message.contains("环境") }
+            )
+        )
+        _uiState.update { it.copy(smartAnalysis = analysis) }
+    }
+
+    fun renameCompartment(boxId: Int, name: String) {
+        val trimmed = name.trim()
+        if (boxId !in 1..MEDICINE_COMPARTMENT_COUNT || trimmed.isEmpty()) return
+        viewModelScope.launch { medicineCompartmentDao.updateName(boxId, trimmed) }
+    }
+
+    fun saveCompartmentInfo(boxId: Int, name: String, stock: Int, dosePerUse: Int, lowStockThreshold: Int) {
+        if (boxId !in 1..MEDICINE_COMPARTMENT_COUNT) return
+        viewModelScope.launch {
+            medicineCompartmentDao.updateMedicineInfo(
+                boxId = boxId,
+                name = name.trim().ifBlank { "$boxId 号药盒" },
+                stock = stock.coerceAtLeast(0),
+                dosePerUse = dosePerUse.coerceAtLeast(1),
+                lowStockThreshold = lowStockThreshold.coerceAtLeast(0)
+            )
+        }
+    }
+
+    fun addCompartmentInfo(boxId: Int, name: String, stock: Int, dosePerUse: Int, lowStockThreshold: Int) {
+        if (boxId !in 1..MEDICINE_COMPARTMENT_COUNT) return
+        viewModelScope.launch {
+            medicineCompartmentDao.activate(
+                boxId = boxId,
+                name = name.trim().ifBlank { "$boxId 号药盒" },
+                stock = stock.coerceAtLeast(0),
+                dosePerUse = dosePerUse.coerceAtLeast(1),
+                lowStockThreshold = lowStockThreshold.coerceAtLeast(0)
+            )
+        }
+    }
+
+    fun deactivateCompartment(boxId: Int) {
+        if (boxId !in 1..MEDICINE_COMPARTMENT_COUNT) return
+        viewModelScope.launch {
+            medicineCompartmentDao.deactivate(boxId, "$boxId 号药盒")
+            medicinePlanDao.disableByBoxId(boxId)
+            medicineDoseDao.markBoxDoses(
+                boxId = boxId,
+                newStatus = MedicineDoseEntity.STATUS_SKIPPED,
+                statuses = listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_SNOOZED),
+                reason = "药盒已停用"
+            )
+            cancelMedicineTimer()
+            generateUpcomingDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun transferCompartment(fromBoxId: Int, toBoxId: Int) {
+        if (fromBoxId !in 1..MEDICINE_COMPARTMENT_COUNT || toBoxId !in 1..MEDICINE_COMPARTMENT_COUNT || fromBoxId == toBoxId) return
+        viewModelScope.launch {
+            val items = medicineCompartmentDao.getAll()
+            val from = items.firstOrNull { it.boxId == fromBoxId && it.active } ?: return@launch
+            val to = items.firstOrNull { it.boxId == toBoxId && !it.active } ?: return@launch
+            medicineCompartmentDao.activate(
+                boxId = to.boxId,
+                name = from.name,
+                stock = from.stock,
+                dosePerUse = from.dosePerUse,
+                lowStockThreshold = from.lowStockThreshold
+            )
+            medicineCompartmentDao.deactivate(from.boxId, "${from.boxId} 号药盒")
+            medicinePlanDao.transferBox(from.boxId, to.boxId, from.name)
+            medicineDoseDao.transferBoxDoses(
+                fromBoxId = from.boxId,
+                toBoxId = to.boxId,
+                medicineName = from.name,
+                statuses = listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_SNOOZED, MedicineDoseEntity.STATUS_MISSED)
+            )
+            cancelMedicineTimer()
+            generateUpcomingDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun moveCompartment(boxId: Int, direction: Int) {
+        viewModelScope.launch {
+            val items = medicineCompartmentDao.getAll().toMutableList()
+            val index = items.indexOfFirst { it.boxId == boxId }
+            val targetIndex = index + direction
+            if (index < 0 || targetIndex !in items.indices) return@launch
+            val current = items[index]
+            val target = items[targetIndex]
+            val now = System.currentTimeMillis()
+            medicineCompartmentDao.insertAll(
+                listOf(
+                    current.copy(sortOrder = target.sortOrder, updatedAt = now),
+                    target.copy(sortOrder = current.sortOrder, updatedAt = now)
+                )
+            )
+        }
+    }
+
+    private fun startMedicineTimerTicker() {
+        viewModelScope.launch {
+            while (true) {
+                delay(1000L)
+                _uiState.update { current ->
+                    current.copy(
+                        medicineTimers = current.medicineTimers.map { timer ->
+                            if (timer.isRinging) timer else timer.copy(remainingSeconds = (timer.remainingSeconds - 1L).coerceAtLeast(0L))
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private fun startDoseMaintenanceTicker() {
+        viewModelScope.launch {
+            while (true) {
+                mergeDuplicateSnoozedDoses()
+                generateUpcomingDoses()
+                markOverdueDoses()
+                notifyDueDoses()
+                syncUpcomingDosesToDevice()
+                delay(60_000L)
+            }
+        }
+    }
+
+    fun connect() {
+        val settings = _settingsState.value
+        _settingsState.update { it.copy(isConnecting = true, errorMessage = null) }
+        _uiState.update { it.copy(isConnecting = true) }
+        val clientId = "AndroidApp_${System.currentTimeMillis()}"
+        mqttManager.connect(
+            brokerUrl = settings.mqttBroker,
+            clientId = clientId,
+            deviceId = settings.deviceId,
+            username = settings.mqttUsername,
+            password = settings.mqttPassword,
+            onConnected = {
+                _settingsState.update { it.copy(isConnected = true, isConnecting = false) }
+                _uiState.update { it.copy(isOnline = true, isConnecting = false, deviceId = settings.deviceId) }
+            },
+            onDisconnected = {
+                _settingsState.update { it.copy(isConnected = false, isConnecting = false) }
+                _uiState.update { it.copy(isOnline = false, isConnecting = false) }
+            },
+            onSensorDataReceived = { handleSensorData(it) },
+            onStatusReceived = { handleDeviceStatus(it) },
+            onCommandResponseReceived = { handleCommandResponse(it) },
+            onAlertEventReceived = { handleAlertEvent(it) },
+            onError = { error ->
+                _settingsState.update { it.copy(isConnecting = false, errorMessage = error) }
+                _uiState.update { it.copy(isConnecting = false) }
+            }
+        )
+    }
+
     fun disconnect() {
         mqttManager.disconnect()
         _settingsState.update { it.copy(isConnected = false, isConnecting = false) }
         _uiState.update { it.copy(isOnline = false, isConnecting = false) }
     }
 
-    /**
-     * 更新设置
-     */
-    fun updateSettings(
-        mqttBroker: String,
-        deviceId: String,
-        username: String,
-        password: String
-    ) {
+    fun updateSettings(mqttBroker: String, deviceId: String, username: String, password: String) {
         _settingsState.update {
-            it.copy(
-                mqttBroker = mqttBroker,
-                deviceId = deviceId,
-                mqttUsername = username,
-                mqttPassword = password
-            )
+            it.copy(mqttBroker = mqttBroker, deviceId = deviceId, mqttUsername = username, mqttPassword = password)
         }
         _uiState.update { it.copy(deviceId = deviceId) }
     }
 
-    /**
-     * 处理传感器数据（主要用于UI刷新）
-     * 异常推送由 alert 主题驱动，避免重复推送
-     */
     private fun handleSensorData(data: SensorData) {
         val alerts = mutableListOf<AlertItem>()
-        val deviceId = _settingsState.value.deviceId
-
-        appendEnvironmentAlerts(data, alerts)
-        appendBoxStateAlerts(data, deviceId, alerts)
-        latestEventAlert?.let { alerts.add(0, it) }
-
-        updateUiState(data, alerts.distinctBy { it.message })
-    }
-
-    /**
-     * 依据 sensors 里的 alerts/environment_limits 生成UI告警信息
-     */
-    private fun appendEnvironmentAlerts(data: SensorData, alerts: MutableList<AlertItem>) {
-        val env = data.environment ?: return
-        val limits = data.environmentLimits ?: buildFallbackLimits()
-
-        val temperatureAbnormal = data.alerts?.isTemperatureAbnormal()
-            ?: (env.temperature < limits.temperatureLow || env.temperature > limits.temperatureHigh)
-        val humidityAbnormal = data.alerts?.isHumidityAbnormal()
-            ?: (env.humidity < limits.humidityLow || env.humidity > limits.humidityHigh)
-
-        if (temperatureAbnormal) {
-            alerts.add(
-                AlertItem(
-                    message = "温度异常: ${String.format("%.1f", env.temperature)}°C（额定 ${String.format("%.1f", limits.temperatureRated)}°C）",
-                    level = AlertLevel.WARNING
-                )
+        latestEventAlert?.let { alerts.add(it) }
+        if (data.state == "tilted" || data.state == "moving") {
+            alerts.add(AlertItem(message = "药箱正在移动或倾斜", level = AlertLevel.ERROR))
+        }
+        _uiState.update {
+            it.copy(
+                sensorData = data,
+                isOnline = true,
+                isConnecting = false,
+                lastUpdateTime = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+                alerts = alerts.distinctBy { alert -> alert.message },
+                buzzerEnabled = data.buzzerEnabled?.let { value -> value != 0 } ?: it.buzzerEnabled
             )
         }
-        if (humidityAbnormal) {
-            alerts.add(
-                AlertItem(
-                    message = "湿度异常: ${String.format("%.1f", env.humidity)}%（额定 ${String.format("%.1f", limits.humidityRated)}%）",
-                    level = AlertLevel.WARNING
-                )
-            )
-        }
-
-        lastAlertStates["temperature"] = temperatureAbnormal
-        lastAlertStates["humidity"] = humidityAbnormal
+        refreshSmartAnalysis()
     }
 
-    /**
-     * 依据药箱状态生成UI提示
-     */
-    private fun appendBoxStateAlerts(
-        data: SensorData,
-        deviceId: String,
-        alerts: MutableList<AlertItem>
-    ) {
-        when (data.state) {
-            "tilted", "moving" -> {
-                alerts.add(
-                    AlertItem(
-                        message = "药箱处于倾斜或移动状态",
-                        level = AlertLevel.ERROR
-                    )
-                )
-            }
-            "opened" -> {
-                if (lastAlertStates["opened"] != true) {
-                    notificationManager?.notifyBoxOpened(deviceId)
-                    lastAlertStates["opened"] = true
+    private fun handleDeviceStatus(status: DeviceStatus) {
+        _uiState.update {
+            it.copy(
+                deviceStatus = status,
+                isOnline = status.isOnline(),
+                buzzerEnabled = status.buzzerEnabled?.let { value -> value != 0 } ?: it.buzzerEnabled
+            )
+        }
+        _settingsState.update { it.copy(isConnected = status.isOnline()) }
+        refreshSmartAnalysis()
+    }
+
+    private fun handleCommandResponse(response: CommandResponse) {
+        if (response.isSuccess()) {
+            when (response.cmd) {
+                "set_medicine_timer" -> {
+                    addOrUpdateMedicineTimerFromResponse(response)
+                    notificationManager?.notifyInfo("定时已设置", "服药提醒已更新")
                 }
+                "cancel_medicine_timer" -> {
+                    if (response.timerId != null) removeMedicineTimer(response.timerId) else clearMedicineTimers()
+                    notificationManager?.notifyInfo("定时已取消", "服药提醒已取消")
+                }
+                else -> notificationManager?.notifyInfo("命令成功", response.cmd)
             }
-            else -> {
-                lastAlertStates["opened"] = false
-            }
+        } else {
+            if (response.cmd == "set_medicine_timer") pendingMedicineTimerDraft = null
+            notificationManager?.notifyInfo("命令失败", "${response.cmd}: ${response.getErrorCodeDescription()}")
         }
     }
 
-    /**
-     * 处理设备主动告警事件（alert主题）
-     */
     private fun handleAlertEvent(event: AlertEvent) {
-        val deviceId = _settingsState.value.deviceId
-
         when (event.event) {
-            AlertEvent.EVENT_ENV_ABNORMAL -> {
-                val temperatureAbnormal = event.temperatureAbnormal == 1
-                val humidityAbnormal = event.humidityAbnormal == 1
-
-                val details = mutableListOf<String>()
-                if (temperatureAbnormal && event.temperature != null) {
-                    details.add("温度 ${String.format("%.1f", event.temperature)}°C")
-                }
-                if (humidityAbnormal && event.humidity != null) {
-                    details.add("湿度 ${String.format("%.1f", event.humidity)}%")
-                }
-                val message = if (details.isEmpty()) {
-                    "环境异常，请检查药箱"
-                } else {
-                    "环境异常: ${details.joinToString("，")}"
-                }
-
-                latestEventAlert = AlertItem(
-                    message = message,
-                    level = AlertLevel.ERROR
-                )
-                recordAlert("环境异常", message)
-
-                if (!alertPushSuppressed) {
-                    notificationManager?.notifyEnvironmentAbnormal(
-                        deviceId = deviceId,
-                        temperature = event.temperature,
-                        humidity = event.humidity,
-                        ratedTemperature = event.ratedTemperature,
-                        ratedHumidity = event.ratedHumidity,
-                        temperatureAbnormal = temperatureAbnormal,
-                        humidityAbnormal = humidityAbnormal
+            AlertEvent.EVENT_MEDICINE_TIMER_ALARM -> {
+                val timerId = event.timerId ?: 0
+                var message = "服药时间到了"
+                _uiState.update { current ->
+                    val timer = current.medicineTimers.firstOrNull { it.timerId == timerId }
+                    if (timer != null) {
+                        message = "请服用 ${timer.medicineName}（${timer.boxId}号药盒）"
+                    }
+                    current.copy(
+                        medicineTimers = current.medicineTimers.map { item ->
+                            if (item.timerId == timerId) item.copy(remainingSeconds = 0L, isRinging = true) else item
+                        }
                     )
                 }
-
-                lastAlertStates["temperature"] = temperatureAbnormal
-                lastAlertStates["humidity"] = humidityAbnormal
+                latestEventAlert = AlertItem(message = message, level = AlertLevel.ERROR)
+                notificationManager?.notifyInfo("服药提醒", message)
+                recordAlert("服药提醒", message)
             }
-
-            AlertEvent.EVENT_ENV_RECOVERED -> {
-                latestEventAlert = AlertItem(
-                    message = "环境已恢复正常",
-                    level = AlertLevel.INFO
-                )
-                notificationManager?.notifyEnvironmentRecovered(deviceId)
-                notificationManager?.clearTemperatureAlert()
-                notificationManager?.clearHumidityAlert()
-                recordAlert("环境恢复", "温湿度已恢复正常")
-                lastAlertStates["temperature"] = false
-                lastAlertStates["humidity"] = false
+            AlertEvent.EVENT_MEDICINE_TIMER_CANCELLED -> {
+                event.timerId?.let { removeMedicineTimer(it) }
+                val message = "服药提醒已停止"
+                latestEventAlert = AlertItem(message = message, level = AlertLevel.INFO)
+                notificationManager?.notifyInfo("定时已停止", message)
+                recordAlert("定时已停止", "source=${event.source ?: "unknown"}")
             }
-
-            AlertEvent.EVENT_DROP_DETECTED -> {
-                // 新一轮跌落报警开始，重新允许推送
-                alertPushSuppressed = false
-
-                val message = "检测到药箱跌落（加速度>${event.thresholdG ?: 6.0}G）"
-                latestEventAlert = AlertItem(
-                    message = message,
-                    level = AlertLevel.ERROR
-                )
-                recordAlert("跌落告警", message)
-
-                if (!alertPushSuppressed) {
-                    notificationManager?.notifyDropDetected(
-                        deviceId = deviceId,
-                        acceleration = event.accelMagnitude,
-                        durationMs = event.durationMs
-                    )
-                }
-
-                lastAlertStates["drop"] = true
-            }
-
             AlertEvent.EVENT_DROP_ALARM_CANCELLED -> {
-                val stopPush = event.stopPush == 1
-                if (stopPush) {
-                    alertPushSuppressed = true
-                }
-
-                latestEventAlert = AlertItem(
-                    message = if (stopPush) {
-                        "已按KEY2消警，APP异常推送已静默"
-                    } else {
-                        "跌落报警已取消"
-                    },
-                    level = AlertLevel.INFO
-                )
-
+                latestEventAlert = AlertItem(message = "报警已取消", level = AlertLevel.INFO)
                 notificationManager?.clearTiltedAlert()
-                notificationManager?.notifyDropAlarmCancelled(deviceId, stopPush)
-                recordAlert("消警事件", "source=${event.source ?: "unknown"}, stop_push=${event.stopPush ?: 0}")
-                lastAlertStates["drop"] = false
             }
-
-            else -> {
-                Timber.w("收到未知告警事件: ${event.event}")
+            AlertEvent.EVENT_ENV_RECOVERED -> {
+                latestEventAlert = AlertItem(message = "环境已恢复正常", level = AlertLevel.INFO)
+            }
+            AlertEvent.EVENT_ENV_ABNORMAL -> {
+                latestEventAlert = AlertItem(message = "环境异常", level = AlertLevel.ERROR)
+            }
+            AlertEvent.EVENT_DROP_DETECTED -> {
+                latestEventAlert = AlertItem(message = "检测到跌落", level = AlertLevel.ERROR)
             }
         }
-
-        // 告警事件到达时，主动更新一次UI告警区
         _uiState.update { current ->
             val merged = buildList {
                 latestEventAlert?.let { add(it) }
@@ -537,174 +582,434 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
             }.distinctBy { it.message }
             current.copy(alerts = merged)
         }
+        refreshSmartAnalysis()
     }
 
-    /**
-     * 记录告警历史
-     */
-    private fun recordAlert(type: String, message: String) {
-        val record = AlertRecord(
-            type = type,
-            message = message,
-            timestamp = System.currentTimeMillis()
+    private fun addOrUpdateMedicineTimerFromResponse(response: CommandResponse) {
+        val timerId = response.timerId ?: return
+        if (timerId !in 1..MAX_MEDICINE_TIMERS) return
+        val draft = pendingTimerDrafts.remove(timerId) ?: pendingMedicineTimerDraft
+        if (draft == null) return
+        pendingMedicineTimerDraft = null
+        val item = MedicineTimerUiItem(
+            timerId = timerId,
+            boxId = draft.boxId,
+            medicineName = draft.medicineName,
+            mode = response.mode ?: "countdown",
+            targetHour = response.targetHour ?: 0,
+            targetMinute = response.targetMinute ?: 0,
+            targetSecond = response.targetSecond ?: 0,
+            remainingSeconds = response.remainingSeconds ?: 0L,
+            doseId = draft.doseId
         )
-        alertHistory.add(record)
-        Timber.d("记录告警: $type - $message")
-    }
-
-    /**
-     * 获取告警历史
-     */
-    fun getAlertHistory(): List<AlertRecord> = alertHistory.toList()
-
-    /**
-     * 更新UI状态
-     */
-    private fun updateUiState(data: SensorData, alerts: List<AlertItem>) {
-        _uiState.update { currentState ->
-            currentState.copy(
-                sensorData = data,
-                isOnline = true,
-                isConnecting = false,
-                lastUpdateTime = java.text.SimpleDateFormat(
-                    "HH:mm:ss",
-                    java.util.Locale.getDefault()
-                ).format(java.util.Date()),
-                alerts = alerts
-            )
+        _uiState.update { current ->
+            val withoutOld = current.medicineTimers.filterNot { it.timerId == timerId }
+            current.copy(medicineTimers = (withoutOld + item).sortedBy { it.timerId }.take(MAX_MEDICINE_TIMERS))
         }
     }
 
-    /**
-     * 处理设备状态
-     */
-    private fun handleDeviceStatus(status: DeviceStatus) {
-        _uiState.update { currentState ->
-            currentState.copy(
-                deviceStatus = status,
-                isOnline = status.isOnline()
-            )
-        }
-
-        _settingsState.update { currentState ->
-            currentState.copy(
-                isConnected = status.isOnline()
-            )
-        }
+    private fun removeMedicineTimer(timerId: Int) {
+        _uiState.update { current -> current.copy(medicineTimers = current.medicineTimers.filterNot { it.timerId == timerId }) }
     }
 
-    /**
-     * 处理命令响应
-     */
-    private fun handleCommandResponse(response: CommandResponse) {
-        if (response.isSuccess()) {
-            Timber.i("命令执行成功: ${response.cmd}")
-            when (response.cmd) {
-                "reset" -> {
-                    notificationManager?.notifyInfo("设备重置", "设备正在重置，请稍候...")
-                }
-                "set_interval" -> {
-                    notificationManager?.notifyInfo("设置成功", "数据上报间隔已更新")
-                }
-                "set_env_rated" -> {
-                    notificationManager?.notifyInfo("设置成功", "温湿度额定值已更新")
-                }
-                "set_buzzer_enable" -> {
-                    notificationManager?.notifyInfo("设置成功", "蜂鸣器开关已更新")
-                }
-            }
-        } else {
-            Timber.w("命令执行失败: ${response.cmd} - ${response.getFullErrorMessage()}")
-            notificationManager?.notifyInfo(
-                "命令失败",
-                "${response.cmd}: ${response.getErrorCodeDescription()}"
-            )
-        }
+    private fun clearMedicineTimers() {
+        _uiState.update { it.copy(medicineTimers = emptyList()) }
     }
 
-    /**
-     * 发送立即上报命令
-     */
     fun publishNow() {
-        val deviceId = _settingsState.value.deviceId
-        mqttManager.publishCommand(deviceId, "publish_now")
-        Timber.d("发送立即上报命令")
+        mqttManager.publishCommand(_settingsState.value.deviceId, "publish_now")
     }
 
-    /**
-     * 发送重置设备命令
-     */
     fun resetDevice() {
-        val deviceId = _settingsState.value.deviceId
-        mqttManager.publishCommand(deviceId, "reset")
-        Timber.d("发送重置设备命令")
+        mqttManager.publishCommand(_settingsState.value.deviceId, "reset")
     }
 
-    /**
-     * 发送设置上报间隔命令
-     */
     fun setInterval(interval: Int) {
-        val deviceId = _settingsState.value.deviceId
-        mqttManager.publishCommand(deviceId, "set_interval", interval)
-        Timber.d("发送设置上报间隔命令: $interval")
+        mqttManager.publishCommand(_settingsState.value.deviceId, "set_interval", interval)
     }
 
-    /**
-     * 发送设置温湿度额定值命令
-     */
     fun setEnvironmentRated(temperature: Double, humidity: Double) {
-        val deviceId = _settingsState.value.deviceId
-        val ok = mqttManager.publishCommand(
-            deviceId = deviceId,
+        mqttManager.publishCommand(
+            deviceId = _settingsState.value.deviceId,
             cmd = "set_env_rated",
-            extraParams = mapOf(
-                "temperature" to temperature,
-                "humidity" to humidity
-            )
+            extraParams = mapOf("temperature" to temperature, "humidity" to humidity)
         )
-        if (ok) {
-            notificationManager?.notifyInfo(
-                "命令已发送",
-                "已下发额定值: ${String.format("%.1f", temperature)}°C / ${String.format("%.1f", humidity)}%"
-            )
-        }
-        Timber.d("发送设置额定环境命令: temperature=$temperature, humidity=$humidity")
     }
 
-    /**
-     * 设置蜂鸣器开关
-     */
     fun setBuzzerEnabled(enabled: Boolean) {
-        val deviceId = _settingsState.value.deviceId
         val ok = mqttManager.publishCommand(
-            deviceId = deviceId,
+            deviceId = _settingsState.value.deviceId,
             cmd = "set_buzzer_enable",
             value = if (enabled) 1 else 0
         )
-        if (ok) {
-            _uiState.update { it.copy(buzzerEnabled = enabled) }
-            notificationManager?.notifyInfo(
-                "命令已发送",
-                if (enabled) "已请求开启蜂鸣器" else "已请求关闭蜂鸣器"
-            )
-        }
-        Timber.d("发送蜂鸣器开关命令: $enabled")
+        if (ok) _uiState.update { it.copy(buzzerEnabled = enabled) }
     }
 
-    private fun buildFallbackLimits(): EnvironmentLimitsData {
-        val tempLow = DEFAULT_RATED_TEMP * (1.0 - ENV_ABNORMAL_RATIO)
-        val tempHigh = DEFAULT_RATED_TEMP * (1.0 + ENV_ABNORMAL_RATIO)
-        val humidityLow = DEFAULT_RATED_HUMIDITY * (1.0 - ENV_ABNORMAL_RATIO)
-        val humidityHigh = DEFAULT_RATED_HUMIDITY * (1.0 + ENV_ABNORMAL_RATIO)
-        return EnvironmentLimitsData(
-            temperatureRated = DEFAULT_RATED_TEMP,
-            temperatureLow = tempLow,
-            temperatureHigh = tempHigh,
-            humidityRated = DEFAULT_RATED_HUMIDITY,
-            humidityLow = humidityLow,
-            humidityHigh = humidityHigh
+    fun addMedicinePlan(
+        boxId: Int,
+        medicineName: String,
+        doseAmount: Int,
+        hour: Int,
+        minute: Int,
+        repeatType: String,
+        daysOfWeek: String
+    ) {
+        val compartment = _uiState.value.medicineCompartments.firstOrNull { it.boxId == boxId && it.active }
+        if (boxId !in 1..MEDICINE_COMPARTMENT_COUNT || medicineName.isBlank() || compartment == null) return
+        viewModelScope.launch {
+            val plan = MedicinePlanEntity(
+                boxId = boxId,
+                medicineName = medicineName.trim(),
+                doseAmount = doseAmount.coerceAtLeast(1),
+                hour = hour.coerceIn(0, 23),
+                minute = minute.coerceIn(0, 59),
+                repeatType = repeatType,
+                daysOfWeek = daysOfWeek,
+                startDate = dateKey(System.currentTimeMillis())
+            )
+            medicinePlanDao.insert(plan)
+            generateUpcomingDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun setPlanEnabled(planId: Long, enabled: Boolean) {
+        viewModelScope.launch {
+            medicinePlanDao.setEnabled(planId, enabled)
+            if (!enabled) {
+                medicineDoseDao.markPlanDoses(
+                    planId = planId,
+                    newStatus = MedicineDoseEntity.STATUS_SKIPPED,
+                    statuses = listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_SNOOZED),
+                    reason = "服药计划已关闭"
+                )
+            }
+            generateUpcomingDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun updateMedicinePlan(
+        planId: Long,
+        boxId: Int,
+        medicineName: String,
+        doseAmount: Int,
+        hour: Int,
+        minute: Int,
+        repeatType: String,
+        daysOfWeek: String
+    ) {
+        val compartment = _uiState.value.medicineCompartments.firstOrNull { it.boxId == boxId && it.active }
+        if (medicineName.isBlank() || compartment == null) return
+        viewModelScope.launch {
+            val existing = medicinePlanDao.getById(planId) ?: return@launch
+            medicinePlanDao.update(
+                existing.copy(
+                    boxId = boxId,
+                    medicineName = medicineName.trim(),
+                    doseAmount = doseAmount.coerceAtLeast(1),
+                    hour = hour.coerceIn(0, 23),
+                    minute = minute.coerceIn(0, 59),
+                    repeatType = repeatType,
+                    daysOfWeek = daysOfWeek
+                )
+            )
+            medicineDoseDao.markPlanDoses(
+                planId = planId,
+                newStatus = MedicineDoseEntity.STATUS_SKIPPED,
+                statuses = listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_SNOOZED),
+                reason = "服药计划已修改"
+            )
+            generateUpcomingDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun deleteMedicinePlan(planId: Long) {
+        viewModelScope.launch {
+            val plan = medicinePlanDao.getById(planId) ?: return@launch
+            medicinePlanDao.delete(plan)
+            medicineDoseDao.markPlanDoses(
+                planId = planId,
+                newStatus = MedicineDoseEntity.STATUS_SKIPPED,
+                statuses = listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_SNOOZED),
+                reason = "服药计划已删除"
+            )
+            generateUpcomingDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun markDoseTaken(doseId: Long) {
+        viewModelScope.launch {
+            val dose = medicineDoseDao.getById(doseId) ?: return@launch
+            val now = System.currentTimeMillis()
+            val delayed = now - dose.scheduledAt > 10L * 60L * 1000L
+            medicineDoseDao.update(
+                dose.copy(
+                    status = MedicineDoseEntity.STATUS_TAKEN,
+                    completedAt = now,
+                    actualTakenAt = now,
+                    riskLevel = if (delayed) 1 else 0,
+                    smartReason = if (delayed) "超过计划时间 10 分钟后确认" else "按时服用",
+                    timerId = null
+                )
+            )
+            notifiedDoseIds.remove(dose.doseId)
+            medicineCompartmentDao.decrementStock(dose.boxId, dose.doseAmount)
+            notificationManager?.notifyInfo("服药已记录", "已记录服用 ${dose.medicineName}")
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun markDoseSkipped(doseId: Long) {
+        viewModelScope.launch {
+            val dose = medicineDoseDao.getById(doseId) ?: return@launch
+            medicineDoseDao.update(
+                dose.copy(
+                    status = MedicineDoseEntity.STATUS_SKIPPED,
+                    completedAt = System.currentTimeMillis(),
+                    riskLevel = 2,
+                    smartReason = "用户主动跳过",
+                    timerId = null,
+                    note = "用户跳过"
+                )
+            )
+            notifiedDoseIds.remove(dose.doseId)
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    fun snoozeDose(doseId: Long) {
+        viewModelScope.launch {
+            val dose = medicineDoseDao.getById(doseId) ?: return@launch
+            val snoozedAt = System.currentTimeMillis() + SNOOZE_DELAY_MS
+            medicineDoseDao.update(
+                dose.copy(
+                    scheduledAt = snoozedAt,
+                    status = MedicineDoseEntity.STATUS_PENDING,
+                    completedAt = null,
+                    timerId = null,
+                    reminderCount = dose.reminderCount + 1,
+                    riskLevel = 1,
+                    smartReason = "用户选择稍后提醒"
+                )
+            )
+            notifiedDoseIds.remove(dose.doseId)
+            mergeDuplicateSnoozedDoses()
+            syncUpcomingDosesToDevice()
+        }
+    }
+
+    private suspend fun mergeDuplicateSnoozedDoses() {
+        val candidates = medicineDoseDao.getByStatuses(
+            listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_SNOOZED)
+        ).filter {
+            it.reminderCount > 0 || it.smartReason.contains("稍后") || it.note.contains("稍后")
+        }
+        candidates.groupBy { dose -> "${dose.planId}:${dateKey(dose.scheduledAt)}" }
+            .values
+            .filter { it.size > 1 }
+            .forEach { group ->
+                val keep = group.maxByOrNull { it.scheduledAt } ?: return@forEach
+                group.filterNot { it.doseId == keep.doseId }.forEach { duplicate ->
+                    medicineDoseDao.update(
+                        duplicate.copy(
+                            status = MedicineDoseEntity.STATUS_SKIPPED,
+                            timerId = null,
+                            completedAt = System.currentTimeMillis(),
+                            riskLevel = 0,
+                            smartReason = "重复稍后提醒已合并",
+                            note = "重复稍后提醒已合并"
+                        )
+                    )
+                }
+            }
+    }
+
+    private suspend fun generateUpcomingDoses() {
+        val plans = medicinePlanDao.getEnabled()
+        val activeBoxIds = medicineCompartmentDao.getActive().map { it.boxId }.toSet()
+        val todayStart = startOfTodayMillis()
+        val blockingStatuses = listOf(
+            MedicineDoseEntity.STATUS_PENDING,
+            MedicineDoseEntity.STATUS_SNOOZED,
+            MedicineDoseEntity.STATUS_TAKEN,
+            MedicineDoseEntity.STATUS_MISSED
+        )
+        plans.filter { it.boxId in activeBoxIds }.forEach { plan ->
+            for (dayOffset in 0..7) {
+                val scheduledAt = scheduledMillis(todayStart, dayOffset, plan.hour, plan.minute)
+                val dayStart = todayStart + dayOffset * 24L * 60L * 60L * 1000L
+                val dayEnd = dayStart + 24L * 60L * 60L * 1000L
+                if (scheduledAt < System.currentTimeMillis() - 60_000L) continue
+                if (!planMatchesDay(plan, scheduledAt)) continue
+                if (medicineDoseDao.findBlockingForPlanDay(plan.planId, dayStart, dayEnd, blockingStatuses) == null) {
+                    medicineDoseDao.insert(
+                        MedicineDoseEntity(
+                            planId = plan.planId,
+                            boxId = plan.boxId,
+                            medicineName = plan.medicineName,
+                            doseAmount = plan.doseAmount,
+                            scheduledAt = scheduledAt
+                        )
+                    )
+                }
+                if (plan.repeatType == "once") break
+            }
+        }
+    }
+
+    private suspend fun notifyDueDoses() {
+        val now = System.currentTimeMillis()
+        val dueDoses = medicineDoseDao.getByStatuses(
+            listOf(MedicineDoseEntity.STATUS_PENDING, MedicineDoseEntity.STATUS_MISSED)
+        ).filter { it.status == MedicineDoseEntity.STATUS_PENDING && it.scheduledAt <= now && now - it.scheduledAt < OVERDUE_DELAY_MS }
+        dueDoses.forEach { dose ->
+            if (notifiedDoseIds.add(dose.doseId)) {
+                notificationManager?.notifyMedicineDoseReminder(
+                    doseId = dose.doseId,
+                    medicineName = dose.medicineName,
+                    boxId = dose.boxId,
+                    doseAmount = dose.doseAmount
+                )
+            }
+        }
+        val activeDueIds = dueDoses.map { it.doseId }.toSet()
+        notifiedDoseIds.retainAll(activeDueIds)
+    }
+
+    private suspend fun markOverdueDoses() {
+        val overdueBefore = System.currentTimeMillis() - OVERDUE_DELAY_MS
+        medicineDoseDao.markOverdue(
+            oldStatus = MedicineDoseEntity.STATUS_PENDING,
+            newStatus = MedicineDoseEntity.STATUS_MISSED,
+            before = overdueBefore
         )
     }
+
+    private suspend fun syncUpcomingDosesToDevice() {
+        val activeBoxIds = medicineCompartmentDao.getActive().map { it.boxId }.toSet()
+        val enabledPlanIds = medicinePlanDao.getEnabled().filter { it.boxId in activeBoxIds }.map { it.planId }.toSet()
+        val manualTimerIds = _uiState.value.medicineTimers
+            .filter { it.doseId == null }
+            .map { it.timerId }
+            .toSet()
+        val freeTimerIds = (1..MAX_MEDICINE_TIMERS).filterNot { it in manualTimerIds }
+        val upcoming = medicineDoseDao.getUpcoming(from = System.currentTimeMillis(), limit = 30)
+            .filter { it.boxId in activeBoxIds && it.planId in enabledPlanIds }
+            .take(freeTimerIds.size)
+        medicineDoseDao.clearPendingTimerIds()
+        pendingTimerDrafts.entries.removeAll { it.value.doseId != null }
+        val planTimers = upcoming.mapIndexed { index, dose ->
+            val target = Calendar.getInstance().apply { timeInMillis = dose.scheduledAt }
+            MedicineTimerUiItem(
+                timerId = freeTimerIds[index],
+                boxId = dose.boxId,
+                medicineName = dose.medicineName,
+                mode = "clock",
+                targetHour = target.get(Calendar.HOUR_OF_DAY),
+                targetMinute = target.get(Calendar.MINUTE),
+                targetSecond = target.get(Calendar.SECOND),
+                remainingSeconds = ((dose.scheduledAt - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L),
+                doseId = dose.doseId
+            )
+        }
+        val newPlanTimerIds = planTimers.map { it.timerId }.toSet()
+        _uiState.update {
+            it.copy(
+                medicineTimers = (it.medicineTimers.filter { timer -> timer.doseId == null } + planTimers)
+                    .sortedBy { timer -> timer.timerId }
+            )
+        }
+        if (!mqttManager.isConnected()) return
+        (lastSyncedPlanTimerIds - newPlanTimerIds).forEach { timerId ->
+            mqttManager.publishCommand(
+                deviceId = _settingsState.value.deviceId,
+                cmd = "cancel_medicine_timer",
+                extraParams = mapOf("timer_id" to timerId)
+            )
+        }
+        upcoming.zip(freeTimerIds).forEach { (dose, timerId) ->
+            val target = Calendar.getInstance().apply { timeInMillis = dose.scheduledAt }
+            pendingTimerDrafts[timerId] = MedicineTimerDraft(dose.boxId, dose.medicineName, dose.doseId)
+            mqttManager.publishCommand(
+                deviceId = _settingsState.value.deviceId,
+                cmd = "set_medicine_timer",
+                extraParams = mapOf(
+                    "timer_id" to timerId,
+                    "mode" to "clock",
+                    "hour" to target.get(Calendar.HOUR_OF_DAY),
+                    "minute" to target.get(Calendar.MINUTE),
+                    "second" to target.get(Calendar.SECOND),
+                    "now_hour" to Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+                    "now_minute" to Calendar.getInstance().get(Calendar.MINUTE),
+                    "now_second" to Calendar.getInstance().get(Calendar.SECOND)
+                )
+            )
+            medicineDoseDao.update(dose.copy(timerId = timerId))
+        }
+        lastSyncedPlanTimerIds = newPlanTimerIds
+    }
+
+    fun setMedicineTimer(boxId: Int, mode: String, hour: Int, minute: Int, second: Int) {
+        val timerId = (1..MAX_MEDICINE_TIMERS).firstOrNull { id -> _uiState.value.medicineTimers.none { it.timerId == id } }
+        if (timerId == null) {
+            notificationManager?.notifyInfo("定时已满", "最多只能同时同步 5 个设备定时")
+            return
+        }
+        if (pendingMedicineTimerDraft != null) {
+            notificationManager?.notifyInfo("请稍等", "上一条定时正在等待设备确认")
+            return
+        }
+        val compartment = _uiState.value.medicineCompartments.firstOrNull { it.boxId == boxId && it.active }
+        if (compartment == null) {
+            notificationManager?.notifyInfo("药盒无效", "请选择药盒")
+            return
+        }
+        val params = mutableMapOf<String, Any?>(
+            "timer_id" to timerId,
+            "mode" to mode,
+            "hour" to hour,
+            "minute" to minute,
+            "second" to second
+        )
+        if (mode == "clock") {
+            val calendar = java.util.Calendar.getInstance()
+            params["now_hour"] = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+            params["now_minute"] = calendar.get(java.util.Calendar.MINUTE)
+            params["now_second"] = calendar.get(java.util.Calendar.SECOND)
+        }
+        val ok = mqttManager.publishCommand(_settingsState.value.deviceId, "set_medicine_timer", extraParams = params)
+        if (ok) {
+            pendingMedicineTimerDraft = null
+            pendingTimerDrafts[timerId] = MedicineTimerDraft(compartment.boxId, compartment.name)
+            val target = "%02d:%02d:%02d".format(hour, minute, second)
+            notificationManager?.notifyInfo("定时命令已发送", "${compartment.name} $target")
+        }
+    }
+
+    fun cancelMedicineTimer(timerId: Int? = null) {
+        val ok = mqttManager.publishCommand(
+            deviceId = _settingsState.value.deviceId,
+            cmd = "cancel_medicine_timer",
+            extraParams = mapOf("timer_id" to timerId)
+        )
+        if (ok) {
+            if (timerId != null) removeMedicineTimer(timerId) else clearMedicineTimers()
+            if (timerId == null) {
+                lastSyncedPlanTimerIds = emptySet()
+            } else {
+                lastSyncedPlanTimerIds = lastSyncedPlanTimerIds - timerId
+            }
+        }
+    }
+
+    private fun recordAlert(type: String, message: String) {
+        alertHistory.add(AlertRecord(type, message, System.currentTimeMillis()))
+    }
+
+    fun getAlertHistory(): List<AlertRecord> = alertHistory.toList()
 
     override fun onCleared() {
         super.onCleared()
@@ -712,20 +1017,95 @@ class MainViewModel(application: android.app.Application) : androidx.lifecycle.A
     }
 }
 
-/**
- * 告警记录数据类
- * 用于存储历史告警信息
- */
 data class AlertRecord(
-    val type: String,        // 告警类型（如"温度异常"、"药箱异常"）
-    val message: String,     // 告警详情
-    val timestamp: Long      // 告警时间戳
+    val type: String,
+    val message: String,
+    val timestamp: Long
 ) {
-    /**
-     * 获取格式化的时间字符串
-     */
     fun getFormattedTime(): String {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
         return sdf.format(java.util.Date(timestamp))
     }
+}
+
+private data class MedicineTimerDraft(
+    val boxId: Int,
+    val medicineName: String,
+    val doseId: Long? = null
+)
+
+private fun MedicineCompartmentEntity.toUiItem(): MedicineCompartmentUiItem = MedicineCompartmentUiItem(
+    boxId = boxId,
+    name = name,
+    sortOrder = sortOrder,
+    stock = stock,
+    dosePerUse = dosePerUse,
+    lowStockThreshold = lowStockThreshold,
+    active = active
+)
+
+private fun MedicinePlanEntity.toUiItem(): MedicinePlanUiItem = MedicinePlanUiItem(
+    planId = planId,
+    boxId = boxId,
+    medicineName = medicineName,
+    doseAmount = doseAmount,
+    hour = hour,
+    minute = minute,
+    repeatType = repeatType,
+    daysOfWeek = daysOfWeek,
+    enabled = enabled
+)
+
+private fun MedicineDoseEntity.toUiItem(): MedicineDoseUiItem = MedicineDoseUiItem(
+    doseId = doseId,
+    planId = planId,
+    boxId = boxId,
+    medicineName = medicineName,
+    doseAmount = doseAmount,
+    scheduledAt = scheduledAt,
+    status = status,
+    timerId = timerId
+)
+
+private fun startOfTodayMillis(): Long {
+    return Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+}
+
+private fun scheduledMillis(todayStart: Long, dayOffset: Int, hour: Int, minute: Int): Long {
+    return Calendar.getInstance().apply {
+        timeInMillis = todayStart + dayOffset * 24L * 60L * 60L * 1000L
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+}
+
+private fun planMatchesDay(plan: MedicinePlanEntity, scheduledAt: Long): Boolean {
+    return when (plan.repeatType) {
+        "once" -> dateKey(scheduledAt) == plan.startDate
+        "weekly" -> {
+            val calendar = Calendar.getInstance().apply { timeInMillis = scheduledAt }
+            val mondayBased = when (calendar.get(Calendar.DAY_OF_WEEK)) {
+                Calendar.MONDAY -> 1
+                Calendar.TUESDAY -> 2
+                Calendar.WEDNESDAY -> 3
+                Calendar.THURSDAY -> 4
+                Calendar.FRIDAY -> 5
+                Calendar.SATURDAY -> 6
+                else -> 7
+            }
+            plan.daysOfWeek.split(",").mapNotNull { it.trim().toIntOrNull() }.contains(mondayBased)
+        }
+        else -> true
+    }
+}
+
+private fun dateKey(timestamp: Long): String {
+    return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestamp))
 }
